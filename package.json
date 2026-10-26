@@ -1,0 +1,9 @@
+{
+  "name": "claude-profiles",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": { "node": ">=23.11.0" },
+  "bin": { "claude-profiles": "bin/claude-profiles.js" },
+  "scripts": { "test": "node --test" }
+}
