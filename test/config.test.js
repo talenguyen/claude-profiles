@@ -2,8 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { writeFile, mkdir, readFile, stat, lstat } = require('node:fs/promises');
 const { join } = require('node:path');
-const { materializeProfileConfig, removeProfileConfig } = require('../src/config.js');
-const { makeTempDir, removeTempDir } = require('./helpers.js');
+const { materializeProfileConfig, removeProfileConfig, readProfileState } = require('../src/config.js');
+const { makeTempDir, removeTempDir, clearInheritedConfigEnv } = require('./helpers.js');
+
+clearInheritedConfigEnv();
 
 let tempDir;
 let baseConfigDir;
@@ -58,4 +60,28 @@ test('removes only the validated profile config directory', async () => {
   const target = await materializeProfileConfig({ baseConfigDir, baseStateFile, profilesConfigDir, profile: 'mep' });
   await removeProfileConfig({ profilesConfigDir, profile: 'mep' });
   await assert.rejects(stat(target));
+});
+
+test('a new profile never inherits the base account usage cache', async () => {
+  await writeFile(baseStateFile, JSON.stringify({
+    oauthAccount: { accountUuid: 'base' },
+    cachedUsageUtilization: { fetchedAtMs: 1, accountUuid: 'base', utilization: {} },
+    other: true
+  }));
+  const target = await materializeProfileConfig({ baseConfigDir, baseStateFile, profilesConfigDir, profile: 'mep' });
+  assert.deepEqual(JSON.parse(await readFile(join(target, '.claude.json'))), { other: true });
+});
+
+test('readProfileState returns only account metadata and the usage cache', async () => {
+  const dir = join(tempDir, 'state');
+  await mkdir(dir);
+  await writeFile(join(dir, '.claude.json'), JSON.stringify({
+    oauthAccount: { accountUuid: 'u' }, cachedUsageUtilization: { fetchedAtMs: 5 }, mcpServers: { secret: 'x' }
+  }));
+  assert.deepEqual(await readProfileState(dir), { oauthAccount: { accountUuid: 'u' }, cachedUsageUtilization: { fetchedAtMs: 5 } });
+  assert.equal(await readProfileState(join(tempDir, 'missing')), null);
+  await writeFile(join(dir, '.claude.json'), '{not json');
+  assert.equal(await readProfileState(dir), null);
+  await writeFile(join(dir, '.claude.json'), '[]');
+  assert.equal(await readProfileState(dir), null);
 });

@@ -8,4 +8,10 @@ async function makeTempDir(prefix = 'claude-profiles-') {
 async function removeTempDir(directory) {
   await fs.rm(directory, { recursive: true, force: true });
 }
-module.exports = { makeTempDir, removeTempDir };
+// Tests must never read or write the developer's real profiles or credentials.
+function clearInheritedConfigEnv() {
+  for (const key of Object.keys(process.env)) {
+    if (key === 'CLAUDE_CONFIG_DIR' || key === 'CODEX_HOME' || key.startsWith('XDG_')) delete process.env[key];
+  }
+}
+module.exports = { makeTempDir, removeTempDir, clearInheritedConfigEnv };
