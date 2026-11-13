@@ -252,9 +252,10 @@ also means every opted-in profile reads and writes the same per-project memory.
 3. `claude-profiles share-sessions <profile>...` merges each profile's existing
    `projects/` and `file-history/` into the shared folder as a union. A file
    that exists in several profiles is kept once when the copies are identical,
-   or when one is an older prefix of another (a resumed copy of a transcript
-   only ever extends it). If two copies differ in any other way, the command
-   aborts before changing anything and lists the paths; resolve those by hand.
+   or, for direct `projects/<slug>/<session-id>.jsonl` transcripts only, when
+   one is an older prefix of another. Memory, tool-result, subagent, and
+   `file-history/` files must be byte-identical; any other difference aborts
+   before changing anything and lists the paths. Resolve those by hand.
    Then each profile's old folder is renamed to `projects.pre-share` (and
    `file-history.pre-share`) and replaced by a link to the shared folder.
    Copies are APFS clones on macOS, so this is fast and takes no extra space

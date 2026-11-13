@@ -118,6 +118,26 @@ test('identical files are dropped and a resumed copy that extends the original w
   }
 });
 
+test('a memory prefix conflict aborts and changes nothing', async () => {
+  const { root, profiles, sharedDir } = await sandbox();
+  try {
+    const [a, b] = profiles;
+    await put(a.dir, 'projects/-p/memory/MEMORY.md', 'memory\n');
+    await put(b.dir, 'projects/-p/memory/MEMORY.md', 'memory\nwith more\n');
+    const before = [await snapshot(a.dir), await snapshot(b.dir)];
+
+    await assert.rejects(apply({ profiles, sharedDir, isAlive: none }), (error) => {
+      assert.match(error.message, /1 file\(s\).*different content.*nothing was changed/);
+      assert.deepEqual(error.conflicts, [{ profile: 'b', path: path.join('projects', '-p', 'memory', 'MEMORY.md') }]);
+      return true;
+    });
+    assert.deepEqual([await snapshot(a.dir), await snapshot(b.dir)], before);
+    await assert.rejects(fsp.stat(sharedDir));
+  } finally {
+    await removeTempDir(root);
+  }
+});
+
 test('a same-named file with different content aborts and changes nothing', async () => {
   const { root, profiles, sharedDir } = await sandbox();
   try {

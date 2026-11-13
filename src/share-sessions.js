@@ -107,6 +107,11 @@ async function classify(incoming, existing) {
   return 'conflict';
 }
 
+function isDirectTranscript(relativePath) {
+  const parts = relativePath.split(path.sep);
+  return parts.length === 3 && parts[0] === 'projects' && parts[2].endsWith('.jsonl');
+}
+
 async function planItemTree({ profile, source, destination, winners, conflicts, dropped, refusals, relativeTo }) {
   const info = await fsp.lstat(source);
   const kind = leafKind(info);
@@ -141,6 +146,10 @@ async function planItemTree({ profile, source, destination, winners, conflicts, 
     return;
   }
   const outcome = await classify(source, other);
+  if ((outcome === 'incoming-is-older-prefix' || outcome === 'incoming-extends-existing') && !isDirectTranscript(rel)) {
+    conflicts.push({ profile, path: rel });
+    return;
+  }
   if (outcome === 'conflict') conflicts.push({ profile, path: rel });
   else if (outcome === 'incoming-extends-existing') winners.set(destination, { profile, from: source, to: destination, kind: outcome, type: kind });
   else dropped.push({ profile, path: rel, kind: outcome });
@@ -229,8 +238,8 @@ async function copyLeaf(operation) {
 
 /**
  * Share the given profiles' session trees. Existing sessions are copied into
- * the shared folder (a union, never overwriting anything that is not an older
- * prefix of the incoming copy), then each profile's tree is renamed to
+ * the shared folder (a union, with prefix merging limited to direct
+ * transcript files), then each profile's tree is renamed to
  * `<item>.pre-share` and replaced by a link to the shared folder. A refusal,
  * a conflict or a live Claude process aborts before anything changes.
  *
