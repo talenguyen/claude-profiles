@@ -54,5 +54,6 @@ Each item maps to the acceptance checklist in `spec.md`:
 
 The package ships no secrets: `npm pack --dry-run` lists every source file
 under `bin/` and `src/`, the test files, `package.json`, `README.md`,
-`spec.md`, and the project-internal `.pi/agents/*` and `docs/superpowers/*`
-docs; no Keychain token, no local runtime config, no `node_modules/`.
+`LICENSE`, `spec.md`, the `docs/*.md` reference pages, and the
+project-internal `.github/workflows/ci.yml`, `.pi/agents/*`, and
+`docs/superpowers/*` docs; no Keychain token, no local runtime config, no `node_modules/`.
