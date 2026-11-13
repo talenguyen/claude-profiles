@@ -82,7 +82,7 @@ test('use reaches launchClaude when materializeProfileConfig is wired into deps 
     await fsp.mkdir(baseConfigDir, { recursive: true });
     await fsp.writeFile(baseStateFile, '{}');
 
-    const deps = await buildDependencies();
+    const deps = await buildDependencies({ home: tempDir });
     assert.equal(typeof deps.materializeProfileConfig, 'function', 'buildDependencies must expose materializeProfileConfig');
     deps.baseConfigDir = baseConfigDir;
     deps.baseStateFile = baseStateFile;
@@ -106,7 +106,7 @@ test('add reaches authenticateProfile when buildDependencies wires it (live-test
   const { buildDependencies } = require('../bin/claude-profiles.js');
   const tempDir = await makeTempDir('task-live-fix-');
   try {
-    const deps = await buildDependencies();
+    const deps = await buildDependencies({ home: tempDir });
     assert.equal(typeof deps.authenticateProfile, 'function', 'buildDependencies must expose authenticateProfile');
 
     deps.configHome = tempDir;
@@ -501,6 +501,275 @@ test('help documents auto mode, usage, tier and the exit status', async () => {
   await run(['help'], { print: (text) => output.push(text) });
   const text = output.join('\n');
   for (const needle of [/use --auto \[--force\]/, /usage \[--json\]/, /tier <profile> <tier>/, /add <profile> \[--tier <tier>\]/, /status 3/, /experimental/]) {
+    assert.match(text, needle);
+  }
+});
+
+// ---- shared session history ----
+
+const { projectSlug } = require('../src/sessions.js');
+
+// Real temp dirs: profiles in `sharedNames` link `projects` to one shared folder,
+// the others keep a private one. `transcripts` maps a place (`shared` or a
+// profile name) to the session files to create there, as { id: [rows] }.
+async function withSharedSessions({ sharedNames, privateNames = [], transcripts }) {
+  const root = await makeTempDir('auto-shared-');
+  const cwd = path.join(root, 'work.dir');
+  const slug = projectSlug(cwd);
+  const sharedSessionsDir = path.join(root, 'shared');
+  const profilesConfigDir = path.join(root, 'profiles');
+  await fsp.mkdir(path.join(sharedSessionsDir, 'projects'), { recursive: true });
+  for (const name of sharedNames) {
+    await fsp.mkdir(path.join(profilesConfigDir, name), { recursive: true });
+    await fsp.symlink(path.join(sharedSessionsDir, 'projects'), path.join(profilesConfigDir, name, 'projects'));
+  }
+  for (const name of privateNames) await fsp.mkdir(path.join(profilesConfigDir, name, 'projects'), { recursive: true });
+  const place = (where) => (where === 'shared' ? path.join(sharedSessionsDir, 'projects') : path.join(profilesConfigDir, where, 'projects'));
+  for (const [where, files] of Object.entries(transcripts || {})) {
+    await fsp.mkdir(path.join(place(where), slug), { recursive: true });
+    for (const [id, rows] of Object.entries(files)) {
+      await fsp.writeFile(path.join(place(where), slug, `${id}.jsonl`), `${(rows || ['{}']).join('\n')}\n`);
+    }
+  }
+  return { root, cwd, sharedSessionsDir, profilesConfigDir, base: { deps: { profilesConfigDir, sharedSessionsDir, cwd } } };
+}
+
+const ORG_WORK = '93cd1d00-0000-4000-8000-00000000aaaa';
+const ORG_PERSONAL = 'a0464300-0000-4000-8000-00000000bbbb';
+const orgRows = (org) => [JSON.stringify({ type: 'session-owner', accountUuid: 'u', organizationUuid: org, sessionId: 's' }), JSON.stringify({ type: 'user', message: 'hi' })];
+const pro = (five, week, extra = {}) => cachedState(rateLimits(five, week), { organizationType: 'claude_pro', ...extra });
+
+test('--continue on shared history picks the profile with the most capacity, not the first', async () => {
+  const sb = await withSharedSessions({ sharedNames: ['first', 'second'], transcripts: { shared: { s1: null } } });
+  try {
+    const { deps, launched, errors } = autoDeps({ first: pro(80, 80), second: pro(10, 10) }, sb.base);
+    await run(['use', '--auto', '--continue'], deps);
+    assert.equal(launched[0].configDir, '/profiles/second');
+    assert.deepEqual(launched[0].args, ['--continue']);
+    assert.equal(errors.some((text) => /Session belongs/.test(text)), false);
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+test('--resume <id> on shared history is not pinned to an exhausted profile', async () => {
+  const sb = await withSharedSessions({ sharedNames: ['a', 'b'], transcripts: { shared: { 'sess-1': null } } });
+  try {
+    const { deps, launched } = autoDeps({ a: cachedState(rateLimits(100, 10, 3), { organizationType: 'claude_pro' }), b: pro(20, 20) }, sb.base);
+    await run(['use', '--auto', '--resume', 'sess-1'], deps);
+    assert.equal(launched[0].configDir, '/profiles/b');
+    assert.deepEqual(launched[0].args, ['--resume', 'sess-1']);
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+test('when every shared profile is exhausted the normal all-exhausted path applies', async () => {
+  const sb = await withSharedSessions({ sharedNames: ['slow', 'quick'], transcripts: { shared: { 'sess-1': null } } });
+  try {
+    const states = { slow: cachedState(rateLimits(100, 10, 4), { organizationType: 'claude_pro' }), quick: cachedState(rateLimits(100, 10, 1), { organizationType: 'claude_pro' }) };
+    await assert.rejects(run(['use', '--auto', '--resume', 'sess-1'], autoDeps(states, sb.base).deps), (err) => {
+      assert.match(err.message, /^all profiles exhausted; quick frees at/);
+      assert.equal(err.exitCode, 3);
+      return true;
+    });
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+test('a partially shared registry still restricts to the profiles that can see the session', async () => {
+  const sb = await withSharedSessions({ sharedNames: ['a', 'b'], privateNames: ['c'], transcripts: { shared: { 'sess-1': null } } });
+  try {
+    const states = { a: pro(70, 70), b: pro(30, 30), c: pro(0, 0) };
+    const { deps, launched } = autoDeps(states, sb.base);
+    await run(['use', '--auto', '--resume', 'sess-1'], deps);
+    assert.equal(launched[0].configDir, '/profiles/b', 'c has the most capacity but cannot see the session');
+
+    const spent = { a: cachedState(rateLimits(100, 10, 3), { organizationType: 'claude_pro' }), b: cachedState(rateLimits(100, 10, 1), { organizationType: 'claude_pro' }), c: pro(0, 0) };
+    await assert.rejects(run(['use', '--auto', '--resume', 'sess-1'], autoDeps(spent, sb.base).deps), (err) => {
+      assert.match(err.message, /Session belongs to a, b, which are all exhausted; b frees at \d\d:\d\d \(in 1h 0m\)\. Use --force/);
+      assert.equal(err.exitCode, 3);
+      return true;
+    });
+    const forced = autoDeps(spent, sb.base);
+    await run(['use', '--auto', '--force', '--resume', 'sess-1'], forced.deps);
+    assert.equal(forced.launched[0].configDir, '/profiles/b');
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+test('a session id nobody has still falls back to the normal pick with a warning on shared history', async () => {
+  const sb = await withSharedSessions({ sharedNames: ['a', 'b'], transcripts: { shared: {} } });
+  try {
+    const { deps, launched, errors } = autoDeps({ a: pro(50, 50), b: pro(5, 5) }, sb.base);
+    await run(['use', '--auto', '--resume', 'ghost-id'], deps);
+    assert.equal(launched[0].configDir, '/profiles/b');
+    assert.ok(errors.some((text) => /no profile owns session ghost-id/.test(text)));
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+test('the bare --resume picker warning is suppressed for a shared profile and kept for a private one', async () => {
+  const sb = await withSharedSessions({ sharedNames: ['shared'], privateNames: ['solo'] });
+  try {
+    const shared = autoDeps({ shared: pro(1, 1), solo: pro(90, 90) }, sb.base);
+    await run(['use', '--auto', '--resume'], shared.deps);
+    assert.equal(shared.launched[0].configDir, '/profiles/shared');
+    assert.equal(shared.errors.some((text) => /picker/.test(text)), false);
+
+    const solo = autoDeps({ shared: pro(90, 90), solo: pro(1, 1) }, sb.base);
+    await run(['use', '--auto', '--resume'], solo.deps);
+    assert.equal(solo.launched[0].configDir, '/profiles/solo');
+    assert.ok(solo.errors.some((text) => /--resume picker will show only solo's sessions/.test(text)));
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+// ---- --fork ----
+
+const forkSetup = (rows = orgRows(ORG_WORK)) => withSharedSessions({ sharedNames: ['work', 'personal'], transcripts: { shared: { 'sess-1': rows } } });
+const orgStates = (work, personal) => ({
+  work: cachedState(rateLimits(...work), { organizationType: 'claude_team', organizationUuid: ORG_WORK }),
+  personal: cachedState(rateLimits(...personal), { organizationType: 'claude_max', organizationUuid: ORG_PERSONAL })
+});
+
+test('switching a session to a profile on another organization adds --fork-session and says so', async () => {
+  const sb = await forkSetup();
+  try {
+    const { deps, launched, errors } = autoDeps(orgStates([100, 10, 3], [10, 10]), sb.base);
+    await run(['use', '--auto', '--resume', 'sess-1', '--model', 'opus'], deps);
+    assert.equal(launched[0].configDir, '/profiles/personal');
+    assert.deepEqual(launched[0].args, ['--resume', 'sess-1', '--model', 'opus', '--fork-session']);
+    const notice = errors.filter((text) => text.startsWith('auto: '));
+    assert.equal(notice.length, 1);
+    assert.match(notice[0], /^auto: personal \(.*\); adding --fork-session: this session last ran on a different organization \(--no-fork to keep it as is\)$/);
+    assert.equal(errors.indexOf(notice[0]), errors.length - 1);
+    // No organization id, account id or email may ever be printed.
+    assert.doesNotMatch(errors.join('\n'), new RegExp(`${ORG_WORK}|${ORG_PERSONAL}|93cd1d|a04643`));
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+test('--continue also forks when the newest transcript last ran on another organization', async () => {
+  const sb = await forkSetup(orgRows(ORG_WORK));
+  try {
+    const { deps, launched } = autoDeps(orgStates([100, 10, 3], [10, 10]), sb.base);
+    await run(['use', '--auto', '--continue'], deps);
+    assert.deepEqual(launched[0].args, ['--continue', '--fork-session']);
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+test('--no-fork opts out and is not forwarded to Claude', async () => {
+  const sb = await forkSetup();
+  try {
+    for (const argv of [['--auto', '--no-fork', '--resume', 'sess-1'], ['--no-fork', '--auto', '--resume', 'sess-1']]) {
+      const { deps, launched, errors } = autoDeps(orgStates([100, 10, 3], [10, 10]), sb.base);
+      await run(['use', ...argv], deps);
+      assert.equal(launched[0].configDir, '/profiles/personal');
+      assert.deepEqual(launched[0].args, ['--resume', 'sess-1']);
+      assert.equal(errors.some((text) => /fork/.test(text)), false);
+    }
+    const { deps } = autoDeps(orgStates([0, 0], [0, 0]), sb.base);
+    await assert.rejects(run(['use', '--no-fork', 'work'], deps), /--no-fork requires --auto/);
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+test('no fork when the organization is the same, unknown, or the flag is already present', async () => {
+  const same = await forkSetup(orgRows(ORG_PERSONAL));
+  const noRows = await forkSetup(['{}']);
+  const sb = await forkSetup();
+  try {
+    let ctx = autoDeps(orgStates([100, 10, 3], [10, 10]), same.base);
+    await run(['use', '--auto', '--resume', 'sess-1'], ctx.deps);
+    assert.deepEqual(ctx.launched[0].args, ['--resume', 'sess-1']);
+
+    ctx = autoDeps(orgStates([100, 10, 3], [10, 10]), noRows.base);
+    await run(['use', '--auto', '--resume', 'sess-1'], ctx.deps);
+    assert.deepEqual(ctx.launched[0].args, ['--resume', 'sess-1'], 'unknown session organization');
+
+    const unknownProfile = orgStates([100, 10, 3], [10, 10]);
+    unknownProfile.personal = cachedState(rateLimits(10, 10), { organizationType: 'claude_max' });
+    ctx = autoDeps(unknownProfile, sb.base);
+    await run(['use', '--auto', '--resume', 'sess-1'], ctx.deps);
+    assert.deepEqual(ctx.launched[0].args, ['--resume', 'sess-1'], 'unknown profile organization');
+
+    ctx = autoDeps(orgStates([100, 10, 3], [10, 10]), sb.base);
+    await run(['use', '--auto', '--resume', 'sess-1', '--fork-session'], ctx.deps);
+    assert.deepEqual(ctx.launched[0].args, ['--resume', 'sess-1', '--fork-session']);
+
+    ctx = autoDeps(orgStates([100, 10, 3], [10, 10]), sb.base);
+    await run(['use', '--auto', '--resume'], ctx.deps);
+    assert.deepEqual(ctx.launched[0].args, ['--resume'], 'the picker is never forked');
+  } finally {
+    await Promise.all([same, noRows, sb].map((entry) => removeTempDir(entry.root)));
+  }
+});
+
+test('staying on the profile that last ran the session does not fork', async () => {
+  const sb = await forkSetup();
+  try {
+    const { deps, launched, errors } = autoDeps(orgStates([10, 10], [100, 10, 3]), sb.base);
+    await run(['use', '--auto', '--continue'], deps);
+    assert.equal(launched[0].configDir, '/profiles/work');
+    assert.deepEqual(launched[0].args, ['--continue']);
+    assert.equal(errors.some((text) => /fork/.test(text)), false);
+  } finally {
+    await removeTempDir(sb.root);
+  }
+});
+
+// ---- wiring ----
+
+test('use and refresh materialise a shared profile with its shared folder; add and private profiles do not share', async () => {
+  const calls = [];
+  const deps = {
+    registry: {
+      get: async (name) => ({ name, sessions: name === 'a' ? 'shared' : 'private' }),
+      add: async () => {}
+    },
+    resolveClaude: async () => '/fake/claude',
+    materializeProfileConfig: async (args) => { calls.push(args); return `/profiles/${args.profile}`; },
+    authenticateProfile: async () => {},
+    launchClaude: () => {},
+    sharedSessionsDir: '/shared',
+    printErr: () => {},
+    env: { PATH: '/bin' }
+  };
+  await run(['use', 'a'], deps);
+  await run(['use', 'b'], deps);
+  await run(['refresh', 'a'], deps);
+  deps.registry.get = async () => { throw new Error('Profile not found.'); };
+  await run(['add', 'c'], deps);
+  assert.deepEqual(calls.map((call) => [call.profile, call.sessions, call.sharedSessionsDir]), [
+    ['a', 'shared', '/shared'], ['b', 'private', '/shared'], ['a', 'shared', '/shared'], ['c', 'private', '/shared']
+  ]);
+  assert.equal(typeof calls[0].warn, 'function');
+});
+
+test('use --auto passes the chosen profile its sessions mode', async () => {
+  const { deps, launched } = autoDeps({ a: pro(10, 10) });
+  const seen = [];
+  deps.registry.list = async () => [{ name: 'a', sessions: 'shared' }];
+  deps.materializeProfileConfig = async (args) => { seen.push(args.sessions); return '/profiles/a'; };
+  await run(['use', '--auto'], deps);
+  assert.deepEqual(seen, ['shared']);
+  assert.equal(launched.length, 1);
+});
+
+test('help documents share-sessions and --no-fork', async () => {
+  const output = [];
+  await run(['help'], { print: (text) => output.push(text) });
+  const text = output.join('\n');
+  for (const needle of [/share-sessions \[--dry-run\] \[--rollback\] \[<profile>\.\.\.\]/, /use --auto \[--force\] \[--no-fork\]/, /--fork-session/]) {
     assert.match(text, needle);
   }
 });

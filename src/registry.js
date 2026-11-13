@@ -32,11 +32,15 @@ async function readRegistry(registryPath) {
   return parsed;
 }
 
+const SESSION_MODES = ['shared', 'private'];
+
 // Only whitelisted fields leave the registry. `tier` is optional so registries
-// written before tiers existed keep loading.
-function toProfile({ name, tier }) {
+// written before tiers existed keep loading. `sessions` is `shared` only when
+// the profile opted in; a missing or unrecognised value means `private`.
+function toProfile({ name, tier, sessions }) {
   const profile = { name, service: serviceForProfile(name) };
   if (typeof tier === 'string') profile.tier = tier;
+  profile.sessions = sessions === 'shared' ? 'shared' : 'private';
   return profile;
 }
 
@@ -90,7 +94,18 @@ function createRegistry({ configHome }) {
     await writeRegistry(registryPath, { profiles });
   }
 
-  return { list, get, add, remove, setTier };
+  async function setSessions(name, mode) {
+    validateProfile(name);
+    if (!SESSION_MODES.includes(mode)) throw new Error('Invalid sessions mode: use "shared" or "private".');
+    const current = await readRegistry(registryPath);
+    if (!current.profiles.some((entry) => entry && entry.name === name)) {
+      throw new Error('Profile not found.');
+    }
+    const profiles = current.profiles.map((entry) => (entry && entry.name === name ? { ...entry, sessions: mode } : entry));
+    await writeRegistry(registryPath, { profiles });
+  }
+
+  return { list, get, add, remove, setTier, setSessions };
 }
 
 module.exports = { createRegistry };

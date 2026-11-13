@@ -62,8 +62,12 @@ claude-profiles refresh mep
    ```
 
 3. Share bằng symlink các phần không-auth từ config Claude gốc: settings,
-   skills, plugins, commands, hooks, history cần thiết.
+   skills, plugins, commands, hooks cần thiết. `history.jsonl` không được share:
+   nó vẫn riêng cho từng profile.
 4. Không share runtime files: daemon, lock, socket.
+   Session history (`projects/`, `file-history/`) cũng không share mặc định; chỉ
+   các profile đã opt in bằng `claude-profiles share-sessions` mới link hai
+   thư mục này vào `~/.config/claude-profiles/shared/` (xem README).
 5. Tạo `.claude.json` riêng cho profile bằng bản sao từ base nhưng bỏ top-level
    key `oauthAccount`.
 6. Xóa các biến auth/provider có thể ghi đè account:
