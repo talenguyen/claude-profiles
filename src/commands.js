@@ -96,7 +96,7 @@ async function statusCommand(positional, deps) {
 
 async function useCommand(positional, passthrough, deps) {
   const name = positional[0];
-  if (!name) throw new Error('Usage: use <profile> [-- <claude arguments>]');
+  if (!name) throw new Error('Usage: use <profile> [claude arguments...]');
 
   const profile = await deps.registry.get(name);
   const configDir = await deps.materializeProfileConfig({
