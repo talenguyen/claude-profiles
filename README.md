@@ -31,8 +31,10 @@ profile's isolated auth scope; neither credential data nor tokens are printed
 or stored in the registry.
 
 The registry at `~/.config/claude-profiles/profiles.json` (mode `0600`) holds
-only profile metadata: the name, its service label, and an optional plan tier.
-`add --tier <tier>` sets the tier when you create the profile.
+only profile metadata: the name, its service label, an optional plan tier, and
+whether the profile shares session history (`sessions`: `shared` or `private`,
+default `private`). `add --tier <tier>` sets the tier when you create the
+profile.
 
 To replace an existing token without recreating the profile:
 
@@ -50,9 +52,10 @@ claude-profiles add <profile> [--tier <tier>]
 claude-profiles list
 claude-profiles status [profile]
 claude-profiles use <profile> [claude arguments...]
-claude-profiles use --auto [--force] [claude arguments...]
+claude-profiles use --auto [--force] [--no-fork] [claude arguments...]
 claude-profiles usage [--json]
 claude-profiles tier <profile> <tier>
+claude-profiles share-sessions [--dry-run] [--rollback] [<profile>...]
 claude-profiles refresh <profile>
 claude-profiles remove <profile>
 claude-profiles help
@@ -105,14 +108,14 @@ Claude. There is no fallback to a non-isolated run.
 ### Auto mode: `use --auto`
 
 ```sh
-claude-profiles use --auto [--force] [claude arguments...]
+claude-profiles use --auto [--force] [--no-fork] [claude arguments...]
 claude-profiles use --auto --model opus
 ```
 
 `use --auto` checks every registered profile's usage and launches the one with
 the most real capacity left. It picks once, at launch; it never switches
-profile mid-session. Every token after `--auto` and `--force` is passed to
-Claude verbatim. One line on stderr names the choice before Claude starts:
+profile mid-session. Every token after `--auto`, `--force` and `--no-fork` is
+passed to Claude verbatim. One line on stderr names the choice before Claude starts:
 
 ```text
 auto: tech (team-premium, 89% left, 5h resets 14:10)
@@ -173,15 +176,115 @@ the profile that frees up first, then asks `Launch <profile> anyway? [y/N]` on
 a terminal. Without a terminal it exits with status `3` and launches nothing.
 `--force` launches that profile without asking.
 
-**Resuming sessions.** Session transcripts live in each profile's own
-`projects/` directory, so a session started on one profile is invisible to the
-others. With `--resume <id>` (or `-r <id>`) or `--continue` (or `-c`), auto mode
+**Resuming sessions.** By default each profile keeps its own session history,
+so a session started on one profile is invisible to the others. With
+`--resume <id>` (or `-r <id>`) or `--continue` (or `-c`), auto mode then
 restricts the pick to the profile that owns the session (for `--continue`, the
 profile with the newest transcript for the current directory). If that profile
 is exhausted or its usage is unknown, `use --auto` refuses and names when it
 frees up; `--force` launches it anyway. If no profile owns the session id, the
 normal pick applies, with a warning. A bare `--resume` (the picker) prints a
 warning that it lists only the chosen profile's sessions.
+
+Profiles that share session history (see [`share-sessions`](#share-sessions))
+can all see the session, so none is pinned: `--resume <id>` and `--continue`
+pick the profile with the most capacity among the profiles that can see it. If
+every registered profile can, the normal pick and the normal "all exhausted"
+handling apply; if only some can (for example, one profile still keeps private
+sessions), the pick is limited to those. The bare `--resume` warning is left
+out for a profile that shares, because its picker lists the shared sessions.
+This is how you continue a conversation on another profile after one hits its
+usage limit: run `claude-profiles use --auto --continue` in the same folder.
+Detecting the limit and relaunching automatically is not part of this.
+
+**`--fork`.** When auto mode moves a session to a profile on a different
+organization than the one the session last ran on, it adds `--fork-session`
+to the Claude arguments, and the one-line stderr notice says so. Claude then
+writes the continuation to a new session and leaves the original transcript
+untouched, so the original keeps its owner and two profiles never extend the
+same session. Organizations are compared by id and never printed; if either
+side is unknown, nothing is added. Pass `--no-fork` to continue the original
+session in place, or give `--fork-session` yourself (it is never added twice).
+
+### `share-sessions`
+
+```sh
+claude-profiles share-sessions [--dry-run] [--rollback] [<profile>...]
+claude-profiles share-sessions --dry-run tech personal
+claude-profiles share-sessions tech personal
+```
+
+Let the named profiles share session history, so `use --auto --continue` or
+`use --auto --resume <id>` continues the same conversation on a different
+profile. It is opt-in per profile; which profiles share is your choice, and
+profiles you do not name keep their history private. With no names it acts on
+the profiles that already share.
+
+**What is shared.** `projects/` (transcripts, per-project memory, large tool
+results) and `file-history/` (rewind data) of each opted-in profile become
+links to one folder, `~/.config/claude-profiles/shared/` (mode `0700`, beside
+the profile configs, never inside a project repo). History stays scoped per
+project folder inside it, exactly as Claude lays it out. Not shared:
+`history.jsonl` (up-arrow prompt recall) stays per profile, and so do
+credentials, `sessions/`, `session-env/` and everything else. The base
+`~/.claude/projects` used by plain `claude` is not included.
+
+**Data crossing, in plain words.** Continuing a conversation on another
+profile re-sends the whole conversation to Anthropic on *that profile's
+account*: every prompt and reply, every tool result (file contents, command
+output, connector data such as Slack or Drive), and the project memory. Work
+content continued on a personal account therefore goes to that account, under
+that account's terms and privacy settings; the other direction puts personal
+content into an organization account its admins may be able to see. Team and
+Enterprise plans do not train on your data by default; Pro and Max plans depend
+on a privacy setting you control. Check the current terms before relying on
+this. Only opt in profiles you are comfortable crossing that line for. Sharing
+also means every opted-in profile reads and writes the same per-project memory.
+
+**Migrating existing history.**
+
+1. **Exit every Claude session** for the profiles you are about to share, in
+   every terminal. The command refuses while any Claude process for them is
+   alive (it checks each profile's `sessions/<pid>.json`), because a transcript
+   moved while it is being written would split the session.
+2. `claude-profiles share-sessions --dry-run <profile>...` shows how many files
+   would be copied and lists anything blocking, changing nothing.
+3. `claude-profiles share-sessions <profile>...` merges each profile's existing
+   `projects/` and `file-history/` into the shared folder as a union. A file
+   that exists in several profiles is kept once when the copies are identical,
+   or, for direct `projects/<slug>/<session-id>.jsonl` transcripts only, when
+   one is an older prefix of another. Memory, tool-result, subagent, and
+   `file-history/` files must be byte-identical; any other difference aborts
+   before changing anything and lists the paths. Resolve those by hand.
+   Then each profile's old folder is renamed to `projects.pre-share` (and
+   `file-history.pre-share`) and replaced by a link to the shared folder.
+   Copies are APFS clones on macOS, so this is fast and takes no extra space
+   until files change. The backups stay until you delete them. The profile is
+   then marked `sessions: shared` in the registry. Running it again changes
+   nothing.
+4. `claude-profiles share-sessions --rollback [<profile>...]` removes the links
+   and restores each `.pre-share` backup, so a profile gets back exactly the
+   history it had before. Sessions created after the migration stay in the
+   shared folder, since they cannot be attributed to one profile; the command
+   reports how many. `--dry-run` previews a rollback too.
+
+Profiles marked shared are linked automatically when `use` or `refresh` finds
+their `projects/` or `file-history/` missing. A real folder with private
+sessions is never merged silently: `use` prints a notice to run
+`share-sessions`. A link that points anywhere else is refused.
+
+**Concurrent use.** Two Claude processes appending to different sessions are
+safe, as they are in one profile today. Two profiles resuming the *same*
+session at the same time are not: they create branches, Claude follows only
+one, and the other's turns silently drop out of the conversation. Do not run
+one session in two terminals. `--fork-session` (see above) avoids the hazard
+by writing each continuation to its own session, at the cost of one extra
+transcript per switch. Claude's startup transcript cleanup, run by
+whichever profile starts first, now prunes the shared folder for all of them
+(retention comes from the shared `settings.json`).
+
+When a session ends on a usage limit, its last prompt has no real answer;
+re-send it (or type "continue") on the new profile.
 
 ### `usage`
 
@@ -258,6 +361,10 @@ profile config, or changing the registry.
 - `use --auto` and `usage` run each profile's own `claude` to read usage and
   never read, print, or log a token or Keychain item. A new profile does not
   inherit the base account's usage cache.
+- Session history is shared only between profiles you opt in with
+  `share-sessions`, in a `0700` folder outside any project. It never contains
+  credentials, and `--fork` compares organization ids without printing them.
+  Read the data-crossing note under `share-sessions` before opting in.
 - No token ever appears in stdout, stderr, log output, or shell history.
 
 ### What does and does not prove isolation
@@ -317,8 +424,8 @@ Each item maps to the acceptance checklist in `spec.md`:
 - [ ] Settings, plugins, and skills remain shared across profiles (each
       profile reads from the same base config via symlinks for
       `settings.json`, `settings.local.json`, `skills`, `plugins`, `commands`,
-      `hooks`, and `history`). Runtime files — daemon, lock, socket — are not
-      shared.
+      and `hooks`). `history.jsonl` stays per profile. Runtime files — daemon,
+      lock, socket — are not shared.
 - [ ] `refresh mep` re-authenticates successfully; a follow-up `use mep`
       still opens the TUI directly without a login selector.
 - [ ] `remove mep` logs out and deletes the `mep` profile config and registry entry after

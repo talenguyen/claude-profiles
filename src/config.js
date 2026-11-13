@@ -3,7 +3,13 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { validateProfile } = require('./profile.js');
 
-const SHARED_ITEMS = ['settings.json', 'settings.local.json', 'skills', 'plugins', 'commands', 'hooks', 'history'];
+// Linked into every profile from the base Claude config. `history.jsonl` is
+// deliberately absent: it stays per profile (prompt recall only).
+const SHARED_ITEMS = ['settings.json', 'settings.local.json', 'skills', 'plugins', 'commands', 'hooks'];
+
+// Session history. These link to a folder shared between opted-in profiles
+// (never to the base config), so a conversation can continue on another profile.
+const SHARED_SESSION_ITEMS = ['projects', 'file-history'];
 
 async function exists(filePath) {
   try {
@@ -12,6 +18,90 @@ async function exists(filePath) {
   } catch {
     return false;
   }
+}
+
+async function lstatOrNull(filePath) {
+  try {
+    return await fsp.lstat(filePath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+async function realpathOrResolve(filePath) {
+  try {
+    return await fsp.realpath(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+async function ensureSharedItemDir(sharedSessionsDir, item) {
+  const root = path.resolve(sharedSessionsDir);
+  await fsp.mkdir(root, { recursive: true, mode: 0o700 });
+  await fsp.chmod(root, 0o700);
+  const itemDir = path.join(root, item);
+  await fsp.mkdir(itemDir, { recursive: true, mode: 0o700 });
+  await fsp.chmod(itemDir, 0o700);
+  return itemDir;
+}
+
+/**
+ * Classify how one session item (`projects`, `file-history`) of a profile
+ * relates to the shared folder, without changing anything.
+ *
+ * @returns {Promise<'missing' | 'linked' | 'local' | 'foreign'>}
+ *   `linked`: already a symlink to the shared folder. `local`: a real
+ *   directory of private sessions. `foreign`: a symlink elsewhere, or not a
+ *   directory at all.
+ */
+async function sessionItemState(target, sharedSessionsDir, item) {
+  const link = path.join(target, item);
+  const info = await lstatOrNull(link);
+  if (!info) return 'missing';
+  if (info.isSymbolicLink()) {
+    const wanted = await realpathOrResolve(path.join(sharedSessionsDir, item));
+    // A link whose target is gone still counts when it points at the shared folder.
+    let actual;
+    try {
+      actual = await fsp.realpath(link);
+    } catch {
+      actual = path.resolve(path.dirname(link), await fsp.readlink(link));
+    }
+    return actual === wanted ? 'linked' : 'foreign';
+  }
+  return info.isDirectory() ? 'local' : 'foreign';
+}
+
+/**
+ * Link an existing profile's session items to the shared folder.
+ *
+ *  - missing: create the symlink;
+ *  - already linked: nothing;
+ *  - a real directory: never migrated here (that is `share-sessions`), reported;
+ *  - a symlink elsewhere: refused.
+ *
+ * @returns {Promise<{ needsMigration: string[] }>} Items that still hold private sessions.
+ */
+async function linkSharedSessions(target, sharedSessionsDir, items = SHARED_SESSION_ITEMS) {
+  const states = [];
+  for (const item of items) states.push([item, await sessionItemState(target, sharedSessionsDir, item)]);
+  const foreign = states.filter(([, state]) => state === 'foreign').map(([item]) => item);
+  if (foreign.length > 0) {
+    throw new Error(`Cannot share sessions: ${foreign.join(', ')} in the profile config is not a link to the shared sessions folder.`);
+  }
+  const needsMigration = [];
+  for (const [item, state] of states) {
+    if (state === 'local') {
+      needsMigration.push(item);
+    } else {
+      // Also for an existing link: the shared folder may have been deleted since.
+      const itemDir = await ensureSharedItemDir(sharedSessionsDir, item);
+      if (state === 'missing') await fsp.symlink(itemDir, path.join(target, item));
+    }
+  }
+  return { needsMigration };
 }
 
 async function existingOAuthAccount(target) {
@@ -29,19 +119,40 @@ async function existingOAuthAccount(target) {
   }
 }
 
-async function materializeProfileConfig({ baseConfigDir, baseStateFile, profilesConfigDir, profile }) {
+/**
+ * @param {object} args
+ * @param {'shared' | 'private'} [args.sessions] - `shared` links `projects` and
+ *   `file-history` into `sharedSessionsDir`; anything else keeps them private.
+ * @param {string} [args.sharedSessionsDir]
+ * @param {(text: string) => void} [args.warn] - Receives non-fatal notices.
+ */
+async function materializeProfileConfig({
+  baseConfigDir, baseStateFile, profilesConfigDir, profile, sessions = 'private', sharedSessionsDir, warn = () => {}
+}) {
   validateProfile(profile);
+  const shareSessions = sessions === 'shared';
+  if (shareSessions && !sharedSessionsDir) throw new Error('Cannot share sessions: no shared sessions folder is configured.');
 
   const target = path.resolve(profilesConfigDir, profile);
+  let existing = false;
   try {
     const targetStat = await fsp.stat(target);
     if (!targetStat.isDirectory()) {
       throw new Error('Cannot establish account isolation: existing profile config is not a directory.');
     }
     await fsp.chmod(target, 0o700);
-    return target;
+    existing = true;
   } catch (err) {
     if (!err || err.code !== 'ENOENT') throw err;
+  }
+  if (existing) {
+    if (shareSessions) {
+      const { needsMigration } = await linkSharedSessions(target, sharedSessionsDir);
+      if (needsMigration.length > 0) {
+        warn(`warning: ${profile} is set to share sessions but ${needsMigration.join(', ')} still hold private sessions; run: claude-profiles share-sessions ${profile}`);
+      }
+    }
+    return target;
   }
 
   const targetParent = path.dirname(target);
@@ -58,6 +169,11 @@ async function materializeProfileConfig({ baseConfigDir, baseStateFile, profiles
     for (const item of SHARED_ITEMS) {
       const source = path.join(baseConfigDir, item);
       if (await exists(source)) await fsp.symlink(source, path.join(staging, item));
+    }
+    if (shareSessions) {
+      for (const item of SHARED_SESSION_ITEMS) {
+        await fsp.symlink(await ensureSharedItemDir(sharedSessionsDir, item), path.join(staging, item));
+      }
     }
 
     let stateRaw;
@@ -145,4 +261,7 @@ async function hasProfileAuth({ profilesConfigDir, profile }) {
   return (await existingOAuthAccount(target)) !== undefined;
 }
 
-module.exports = { materializeProfileConfig, removeProfileConfig, hasProfileAuth, readProfileState };
+module.exports = {
+  materializeProfileConfig, removeProfileConfig, hasProfileAuth, readProfileState,
+  linkSharedSessions, sessionItemState, SHARED_ITEMS, SHARED_SESSION_ITEMS
+};

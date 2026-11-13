@@ -29,14 +29,14 @@ test('rejects duplicate profiles and removes only the requested entry', async ()
   await registry.add('mep'); await registry.add('uplive');
   await assert.rejects(registry.add('mep'));
   await registry.remove('mep');
-  assert.deepEqual(await registry.list(), [{ name: 'uplive', service: 'Claude Profiles: uplive' }]);
+  assert.deepEqual(await registry.list(), [{ name: 'uplive', service: 'Claude Profiles: uplive', sessions: 'private' }]);
 });
 
 test('tier round-trips through add, list, get and setTier', async () => {
   const registry = createRegistry({ configHome: tempDir });
   await registry.add('plain');
   await registry.add('premium', { tier: 'Team-Premium' });
-  assert.deepEqual(await registry.get('premium'), { name: 'premium', service: 'Claude Profiles: premium', tier: 'team-premium' });
+  assert.deepEqual(await registry.get('premium'), { name: 'premium', service: 'Claude Profiles: premium', tier: 'team-premium', sessions: 'private' });
   assert.equal('tier' in (await registry.get('plain')), false);
   await registry.setTier('plain', 'custom:2.5');
   assert.deepEqual((await registry.list()).map((p) => p.tier), ['custom:2.5', 'team-premium']);
@@ -49,7 +49,26 @@ test('tier round-trips through add, list, get and setTier', async () => {
 test('a legacy registry without tier fields still loads', async () => {
   await writeFile(join(tempDir, 'profiles.json'), JSON.stringify({ profiles: [{ name: 'old', service: 'Claude Profiles: old' }] }));
   const registry = createRegistry({ configHome: tempDir });
-  assert.deepEqual(await registry.list(), [{ name: 'old', service: 'Claude Profiles: old' }]);
+  assert.deepEqual(await registry.list(), [{ name: 'old', service: 'Claude Profiles: old', sessions: 'private' }]);
   await registry.setTier('old', 'max20x');
   assert.equal((await registry.get('old')).tier, 'max20x');
+});
+
+test('sessions defaults to private, round-trips through setSessions and ignores unknown values', async () => {
+  await writeFile(join(tempDir, 'profiles.json'), JSON.stringify({ profiles: [
+    { name: 'legacy', service: 'Claude Profiles: legacy' },
+    { name: 'odd', service: 'Claude Profiles: odd', sessions: 'everyone' }
+  ] }));
+  const registry = createRegistry({ configHome: tempDir });
+  assert.deepEqual((await registry.list()).map((p) => p.sessions), ['private', 'private']);
+  await registry.setSessions('legacy', 'shared');
+  assert.equal((await registry.get('legacy')).sessions, 'shared');
+  assert.equal((await registry.get('odd')).sessions, 'private');
+  await registry.setTier('legacy', 'pro');
+  assert.equal((await registry.get('legacy')).sessions, 'shared');
+  await registry.setSessions('legacy', 'private');
+  assert.equal((await registry.get('legacy')).sessions, 'private');
+  await assert.rejects(registry.setSessions('legacy', 'public'), /Invalid sessions mode/);
+  await assert.rejects(registry.setSessions('ghost', 'shared'), /Profile not found/);
+  assert.equal((await stat(join(tempDir, 'profiles.json'))).mode & 0o777, 0o600);
 });

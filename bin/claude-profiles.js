@@ -58,18 +58,19 @@ function promptConfirm(prompt) {
   });
 }
 
-async function buildDependencies() {
+async function buildDependencies({ home = os.homedir() } = {}) {
   const { createRegistry } = require('../src/registry.js');
   const { createKeychain } = require('../src/keychain.js');
   const { promptHidden, authenticateProfile, logoutProfile } = require('../src/auth.js');
   const { resolveClaude } = require('../src/launcher.js');
   const { materializeProfileConfig, removeProfileConfig, hasProfileAuth, readProfileState } = require('../src/config.js');
 
-  const home = os.homedir();
   const configHome = path.join(home, '.config', 'claude-profiles');
   const baseConfigDir = path.join(home, '.claude');
   const profilesConfigDir = path.join(configHome, 'configs');
   const baseStateFile = path.join(baseConfigDir, '.claude.json');
+  // Shared session history lives beside the profile configs, never in a project repo.
+  const sharedSessionsDir = path.join(configHome, 'shared');
 
   const registry = createRegistry({ configHome });
   const keychain = createKeychain({ runSecurity });
@@ -92,6 +93,7 @@ async function buildDependencies() {
     baseConfigDir,
     baseStateFile,
     profilesConfigDir,
+    sharedSessionsDir,
     env: process.env,
     print: (text) => process.stdout.write(`${text}\n`),
     printErr: (text) => process.stderr.write(`${text}\n`),
