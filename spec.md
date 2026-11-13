@@ -67,7 +67,7 @@ claude-profiles refresh mep
 4. Không share runtime files: daemon, lock, socket.
    Session history (`projects/`, `file-history/`) cũng không share mặc định; chỉ
    các profile đã opt in bằng `claude-profiles share-sessions` mới link hai
-   thư mục này vào `~/.config/claude-profiles/shared/` (xem README).
+   thư mục này vào `~/.config/claude-profiles/shared/` (xem docs/shared-sessions.md).
 5. Tạo `.claude.json` riêng cho profile bằng bản sao từ base nhưng bỏ top-level
    key `oauthAccount`.
 6. Xóa các biến auth/provider có thể ghi đè account:
