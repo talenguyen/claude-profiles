@@ -197,7 +197,7 @@ async function plan({ profiles, sharedDir, items = SHARED_SESSION_ITEMS }) {
   // A path cannot be a file in one profile and a folder in another.
   for (const winner of winners.values()) {
     for (let parent = path.dirname(winner.to); parent.length > sharedDir.length; parent = path.dirname(parent)) {
-      if (winners.has(parent)) conflicts.push({ profile: winner.profile, path: path.relative(sharedDir, parent) });
+      if (winners.has(parent) && winners.get(parent).type !== 'dir') conflicts.push({ profile: winner.profile, path: path.relative(sharedDir, parent) });
     }
   }
   return { copies: [...winners.values()], swaps, links, already, conflicts, dropped, refusals };

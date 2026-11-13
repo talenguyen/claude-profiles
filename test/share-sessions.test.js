@@ -118,6 +118,34 @@ test('identical files are dropped and a resumed copy that extends the original w
   }
 });
 
+for (const [emptyIn, filledIn] of [[0, 1], [1, 0]]) {
+  test(`an empty folder in one profile merges with the same folder holding files in another (empty in ${'ab'[emptyIn]})`, async () => {
+    const { root, profiles, sharedDir } = await sandbox();
+    try {
+      await fsp.mkdir(path.join(profiles[emptyIn].dir, 'projects/-p/memory'), { recursive: true });
+      await put(profiles[filledIn].dir, 'projects/-p/memory/MEMORY.md', 'memory\n');
+
+      const result = await apply({ profiles, sharedDir, isAlive: none });
+      assert.deepEqual(result.completed, ['a', 'b']);
+      assert.equal(await read(path.join(sharedDir, 'projects/-p/memory/MEMORY.md')), 'memory\n');
+    } finally {
+      await removeTempDir(root);
+    }
+  });
+}
+
+test('a file in one profile where another has a folder still conflicts', async () => {
+  const { root, profiles, sharedDir } = await sandbox();
+  try {
+    await put(profiles[0].dir, 'projects/-p/memory/MEMORY.md', 'memory\n');
+    await put(profiles[1].dir, 'projects/-p/memory', 'not a folder');
+    await assert.rejects(apply({ profiles, sharedDir, isAlive: none }), /different content.*nothing was changed/);
+    await assert.rejects(fsp.stat(sharedDir));
+  } finally {
+    await removeTempDir(root);
+  }
+});
+
 test('a memory prefix conflict aborts and changes nothing', async () => {
   const { root, profiles, sharedDir } = await sandbox();
   try {
