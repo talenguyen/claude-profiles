@@ -435,6 +435,18 @@ test('usage prints a table and marks the best profile without launching', async 
   assert.match(row('broken'), /unknown: not signed in/);
 });
 
+test('usage shows unknown when an exhausted window has no reset time', async () => {
+  const { deps, out } = autoDeps({
+    locked: cachedState({
+      five_hour: { utilization: 0, locked_reason: 'overage' },
+      seven_day: { utilization: 10, resets_at: iso(48), locked_reason: null }
+    })
+  });
+  await run(['usage'], deps);
+  const row = out.find((line) => line.startsWith('locked'));
+  assert.deepEqual(row.trim().split(/\s{2,}/), ['locked', 'unknown (default)', '0%', '10%', 'unknown', '0.00', 'exhausted']);
+});
+
 test('usage --json is machine readable and carries no credentials', async () => {
   const { deps, out } = autoDeps({
     a: cachedState(rateLimits(25, 50), { organizationType: 'claude_pro', email: 'someone@example.test', accessToken: 'sk-ant-SECRET' })

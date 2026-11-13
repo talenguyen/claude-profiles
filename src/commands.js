@@ -286,7 +286,7 @@ function describeChoice(entry, snapshot, now) {
 const percentText = (win) => (win ? `${Math.round(win.used)}%` : '-');
 
 function usageRow(entry, snapshot, best, now) {
-  const resets = entry.status === 'unknown' ? '-' : formatReset(entry.status === 'exhausted' ? entry.availableAt ?? entry.limitingResetsAt : entry.limitingResetsAt, now);
+  const resets = entry.status === 'unknown' ? '-' : formatReset(entry.status === 'exhausted' ? entry.availableAt : entry.limitingResetsAt, now);
   let status = entry.status === 'ok' && entry === best ? 'best' : entry.status;
   if (entry.status === 'unknown') status = `unknown: ${snapshot.error}`;
   return [
