@@ -811,6 +811,54 @@ test('use --auto passes the chosen profile its sessions mode', async () => {
   assert.equal(launched.length, 1);
 });
 
+test('remove of one shared profile deletes its links, not the shared sessions the other profile still sees', async () => {
+  const { createRegistry } = require('../src/registry.js');
+  const { removeProfileConfig } = require('../src/config.js');
+  const root = await makeTempDir('remove-shared-');
+  try {
+    const profilesConfigDir = path.join(root, 'profiles');
+    const sharedSessionsDir = path.join(root, 'shared');
+    const registry = createRegistry({ configHome: path.join(root, 'home') });
+    for (const name of ['a', 'b']) {
+      await registry.add(name);
+      await fsp.mkdir(path.join(profilesConfigDir, name), { recursive: true });
+    }
+    const deps = { registry, profilesConfigDir, sharedSessionsDir, isAlive: () => false, print: () => {} };
+    await run(['share-sessions', 'a', 'b'], deps);
+
+    // A session written into the shared folder after sharing.
+    const transcript = path.join(sharedSessionsDir, 'projects', '-work-demo', 'sess-1.jsonl');
+    const history = path.join(sharedSessionsDir, 'file-history', 'sess-1', 'v1');
+    await fsp.mkdir(path.dirname(transcript), { recursive: true });
+    await fsp.writeFile(transcript, '{"type":"user"}\n');
+    await fsp.mkdir(path.dirname(history), { recursive: true });
+    await fsp.writeFile(history, 'edit');
+
+    const loggedOut = [];
+    await run(['remove', 'a'], {
+      ...deps,
+      confirm: async () => 'a',
+      resolveClaude: async () => '/usr/bin/true',
+      env: {},
+      logoutProfile: async ({ configDir }) => loggedOut.push(configDir),
+      removeProfileConfig
+    });
+
+    assert.deepEqual(loggedOut, [path.join(profilesConfigDir, 'a')]);
+    await assert.rejects(fsp.lstat(path.join(profilesConfigDir, 'a')));
+    assert.deepEqual((await registry.list()).map((profile) => profile.name), ['b']);
+    assert.equal(await fsp.readFile(transcript, 'utf8'), '{"type":"user"}\n');
+    assert.equal(await fsp.readFile(history, 'utf8'), 'edit');
+
+    const bProjects = path.join(profilesConfigDir, 'b', 'projects');
+    assert.equal((await fsp.lstat(bProjects)).isSymbolicLink(), true);
+    assert.equal(await fsp.realpath(bProjects), await fsp.realpath(path.join(sharedSessionsDir, 'projects')));
+    assert.equal(await fsp.readFile(path.join(bProjects, '-work-demo', 'sess-1.jsonl'), 'utf8'), '{"type":"user"}\n');
+  } finally {
+    await removeTempDir(root);
+  }
+});
+
 test('help documents share-sessions and --no-fork', async () => {
   const output = [];
   await run(['help'], { print: (text) => output.push(text) });
