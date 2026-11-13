@@ -14,6 +14,12 @@ function spawnInteractive(file, args, options) {
   });
 }
 
+// Probe children get piped stdin/stdout and no stderr: their output is parsed
+// by src/usage.js and never forwarded to the terminal.
+function spawnProbe(file, args, options) {
+  return spawn(file, args, { ...options, stdio: ['pipe', 'pipe', 'ignore'] });
+}
+
 function runSecurity(args) {
   return new Promise((resolve, reject) => {
     execFile('/usr/bin/security', args, (err, stdout, stderr) => {
@@ -57,7 +63,7 @@ async function buildDependencies() {
   const { createKeychain } = require('../src/keychain.js');
   const { promptHidden, authenticateProfile, logoutProfile } = require('../src/auth.js');
   const { resolveClaude } = require('../src/launcher.js');
-  const { materializeProfileConfig, removeProfileConfig, hasProfileAuth } = require('../src/config.js');
+  const { materializeProfileConfig, removeProfileConfig, hasProfileAuth, readProfileState } = require('../src/config.js');
 
   const home = os.homedir();
   const configHome = path.join(home, '.config', 'claude-profiles');
@@ -79,12 +85,16 @@ async function buildDependencies() {
     logoutProfile,
     removeProfileConfig,
     hasProfileAuth,
+    readProfileState,
+    spawnProbe,
+    isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     configHome,
     baseConfigDir,
     baseStateFile,
     profilesConfigDir,
     env: process.env,
     print: (text) => process.stdout.write(`${text}\n`),
+    printErr: (text) => process.stderr.write(`${text}\n`),
     confirm: promptConfirm
   };
 }
@@ -96,7 +106,7 @@ if (require.main === module) {
       await run(process.argv.slice(2), await buildDependencies());
     } catch (error) {
       process.stderr.write(`${error && error.message ? error.message : error}\n`);
-      process.exit(1);
+      process.exit(Number.isInteger(error && error.exitCode) ? error.exitCode : 1);
     }
   })();
 }

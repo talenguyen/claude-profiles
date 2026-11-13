@@ -79,6 +79,8 @@ async function materializeProfileConfig({ baseConfigDir, baseStateFile, profiles
     }
 
     delete state.oauthAccount;
+    // The usage cache belongs to the base account; never inherit it.
+    delete state.cachedUsageUtilization;
     const statePath = path.join(staging, '.claude.json');
     await fsp.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
     await fsp.chmod(statePath, 0o600);
@@ -117,6 +119,20 @@ async function materializeProfileConfig({ baseConfigDir, baseStateFile, profiles
   }
 }
 
+/**
+ * Read only the account metadata and usage cache that auto mode needs from a
+ * profile's `.claude.json`. Returns null when the file is missing or unusable.
+ */
+async function readProfileState(configDir) {
+  try {
+    const state = JSON.parse(await fsp.readFile(path.join(configDir, '.claude.json'), 'utf8'));
+    if (state === null || typeof state !== 'object' || Array.isArray(state)) return null;
+    return { oauthAccount: state.oauthAccount, cachedUsageUtilization: state.cachedUsageUtilization };
+  } catch {
+    return null;
+  }
+}
+
 async function removeProfileConfig({ profilesConfigDir, profile }) {
   validateProfile(profile);
   const target = path.resolve(profilesConfigDir, profile);
@@ -129,4 +145,4 @@ async function hasProfileAuth({ profilesConfigDir, profile }) {
   return (await existingOAuthAccount(target)) !== undefined;
 }
 
-module.exports = { materializeProfileConfig, removeProfileConfig, hasProfileAuth };
+module.exports = { materializeProfileConfig, removeProfileConfig, hasProfileAuth, readProfileState };
