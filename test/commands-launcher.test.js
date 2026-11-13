@@ -43,6 +43,27 @@ test('use launches a materialized native-auth profile without custom Keychain ac
   assert.equal('token' in actual, false);
 });
 
+test('use forwards Claude arguments given without a literal -- separator', async () => {
+  const launched = [];
+  const deps = {
+    resolveClaude: async () => '/fake/claude',
+    registry: { get: async () => ({ name: 'uplive' }) },
+    materializeProfileConfig: async () => '/profiles/uplive',
+    launchClaude: (args) => launched.push(args),
+    env: { PATH: '/bin' }
+  };
+
+  await run(['use', 'uplive', '--resume'], deps);
+  await run(['use', 'uplive', '--resume', 'abc123', '--model', 'opus'], deps);
+  await run(['use', 'uplive', '--', '--resume'], deps);
+
+  assert.deepEqual(launched.map((call) => call.args), [
+    ['--resume'],
+    ['--resume', 'abc123', '--model', 'opus'],
+    ['--resume']
+  ]);
+});
+
 test('remove requires the exact profile confirmation before native logout', async () => {
   const removed = [];
   await run(['remove', 'mep'], { confirm: async () => 'uplive', registry: { get: async () => ({ name: 'mep' }), remove: async () => removed.push('registry') }, logoutProfile: async () => removed.push('logout'), removeProfileConfig: async () => removed.push('config') });
