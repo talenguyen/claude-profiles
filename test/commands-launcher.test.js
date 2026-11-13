@@ -311,6 +311,52 @@ async function withSessions(setup) {
   }
 }
 
+test('auto resume repairs a missing shared link before selecting session owners', async () => {
+  const root = await makeTempDir('auto-shared-sessions-');
+  try {
+    const cwd = path.join(root, 'work.dir');
+    const profilesConfigDir = path.join(root, 'profiles');
+    const baseConfigDir = path.join(root, 'base');
+    const baseStateFile = path.join(baseConfigDir, '.claude.json');
+    const sharedSessionsDir = path.join(root, 'shared');
+    const sharedProfileDir = path.join(profilesConfigDir, 'shared');
+    const privateProfileDir = path.join(profilesConfigDir, 'private');
+    const { projectSlug } = require('../src/sessions.js');
+    await fsp.mkdir(sharedProfileDir, { recursive: true });
+    await fsp.mkdir(privateProfileDir, { recursive: true });
+    await fsp.mkdir(baseConfigDir, { recursive: true });
+    await fsp.writeFile(baseStateFile, '{}');
+    const transcript = path.join(sharedSessionsDir, 'projects', projectSlug(cwd), 'sess-1.jsonl');
+    await fsp.mkdir(path.dirname(transcript), { recursive: true });
+    await fsp.writeFile(transcript, '{}\n');
+
+    const { deps, launched } = autoDeps({
+      shared: cachedState(rateLimits(80, 80)),
+      private: cachedState(rateLimits(0, 0), { organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' })
+    }, {
+      deps: {
+        profilesConfigDir,
+        baseConfigDir,
+        baseStateFile,
+        cwd,
+        sharedSessionsDir,
+        registry: {
+          list: async () => [{ name: 'shared', sessions: 'shared' }, { name: 'private', sessions: 'private' }],
+          get: async (name) => ({ name })
+        },
+        materializeProfileConfig
+      }
+    });
+
+    await run(['use', '--auto', '--resume', 'sess-1'], deps);
+    assert.equal(launched[0].configDir, sharedProfileDir);
+    assert.deepEqual(launched[0].args, ['--resume', 'sess-1']);
+    assert.equal(await fsp.realpath(path.join(sharedProfileDir, 'projects')), await fsp.realpath(path.join(sharedSessionsDir, 'projects')));
+  } finally {
+    await removeTempDir(root);
+  }
+});
+
 test('--resume <id> restricts the pick to the owning profile even when another has more capacity', async () => {
   const { root, cwd } = await withSessions({ small: 'sess-1' });
   try {

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { writeFile, mkdir, readFile, stat, lstat, realpath, symlink, readlink } = require('node:fs/promises');
 const { join } = require('node:path');
-const { materializeProfileConfig, removeProfileConfig, readProfileState, SHARED_ITEMS, SHARED_SESSION_ITEMS } = require('../src/config.js');
+const { materializeProfileConfig, removeProfileConfig, readProfileState } = require('../src/config.js');
 const { makeTempDir, removeTempDir, clearInheritedConfigEnv } = require('./helpers.js');
 
 clearInheritedConfigEnv();
@@ -95,11 +95,10 @@ async function sharedSetup() {
 
 const resolves = async (link, target) => (await realpath(link)) === (await realpath(target));
 
-test('SHARED_ITEMS no longer lists history, and history.jsonl stays private to each profile', async () => {
+test('history files stay private to each profile', async () => {
   await writeFile(baseStateFile, '{}');
   await writeFile(join(baseConfigDir, 'history.jsonl'), 'prompt\n');
   await mkdir(join(baseConfigDir, 'history'));
-  assert.equal(SHARED_ITEMS.includes('history'), false);
   const target = await materializeProfileConfig({ baseConfigDir, baseStateFile, profilesConfigDir, profile: 'mep' });
   await assert.rejects(lstat(join(target, 'history')));
   await assert.rejects(lstat(join(target, 'history.jsonl')));
@@ -108,8 +107,7 @@ test('SHARED_ITEMS no longer lists history, and history.jsonl stays private to e
 test('an opted-in new profile links projects and file-history into a 0700 shared folder', async () => {
   const sharedSessionsDir = await sharedSetup();
   const target = await materializeProfileConfig({ baseConfigDir, baseStateFile, profilesConfigDir, profile: 'a', sessions: 'shared', sharedSessionsDir });
-  assert.deepEqual(SHARED_SESSION_ITEMS, ['projects', 'file-history']);
-  for (const item of SHARED_SESSION_ITEMS) {
+  for (const item of ['projects', 'file-history']) {
     assert.equal((await lstat(join(target, item))).isSymbolicLink(), true);
     assert.equal(await resolves(join(target, item), join(sharedSessionsDir, item)), true);
     assert.equal((await stat(join(sharedSessionsDir, item))).mode & 0o777, 0o700);
@@ -138,7 +136,7 @@ test('an existing opted-in profile with missing session items is linked on the n
   const sharedSessionsDir = await sharedSetup();
   const target = await materializeProfileConfig({ baseConfigDir, baseStateFile, profilesConfigDir, profile: 'a' });
   await materializeProfileConfig({ baseConfigDir, baseStateFile, profilesConfigDir, profile: 'a', sessions: 'shared', sharedSessionsDir });
-  for (const item of SHARED_SESSION_ITEMS) assert.equal(await resolves(join(target, item), join(sharedSessionsDir, item)), true);
+  for (const item of ['projects', 'file-history']) assert.equal(await resolves(join(target, item), join(sharedSessionsDir, item)), true);
   // And again: already linked, nothing to do.
   const warnings = [];
   await materializeProfileConfig({ baseConfigDir, baseStateFile, profilesConfigDir, profile: 'a', sessions: 'shared', sharedSessionsDir, warn: (t) => warnings.push(t) });

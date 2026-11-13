@@ -269,6 +269,11 @@ async function autoUseCommand(passthrough, force, noFork, deps) {
   let transcript = null;
   const intent = parseResumeIntent(passthrough);
   if (intent && intent.kind !== 'picker') {
+    for (const profile of profiles) {
+      if (profile.sessions === 'shared') {
+        await deps.materializeProfileConfig(materializeArgs(deps, profile.name, profile.sessions));
+      }
+    }
     const located = await locateSession({
       profiles: snapshots,
       intent,
