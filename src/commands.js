@@ -9,7 +9,7 @@ Commands:
   add <profile>                    Create a profile and sign in with Claude
   list                             List profiles and auth metadata status
   status [profile]                 Show auth metadata status
-  use <profile> [-- <claude args>] Launch Claude with a profile
+  use <profile> [claude args...]   Launch Claude with a profile
   refresh <profile>                Sign in again for a profile
   remove <profile>                 Remove a profile after confirmation
   help, --help, -h                 Show this help
@@ -25,6 +25,17 @@ function parseArgs(argv) {
     positional: argv.slice(0, dashIndex),
     passthrough: argv.slice(dashIndex + 1)
   };
+}
+
+// `use <profile> [args...]`: the first token is the profile; every later token
+// is forwarded to Claude verbatim. A single leading `--` is an optional
+// separator and is dropped, so `use <profile> -- <args>` keeps its meaning.
+function parseUseArgs(argv) {
+  if (!Array.isArray(argv)) throw new Error('Usage: arguments must be an array.');
+  const [name, ...tail] = argv;
+  const positional = name && !name.startsWith('-') ? [name] : [];
+  const passthrough = tail[0] === '--' ? tail.slice(1) : tail;
+  return { positional, passthrough };
 }
 
 function defaultPrint(text) {
@@ -148,14 +159,19 @@ async function run(argv, deps = {}) {
     throw new Error(`Usage: unknown command "${command}". Valid commands: ${[...COMMANDS].join(', ')}.`);
   }
 
-  const { positional, passthrough } = parseArgs(rest);
   const print = deps.print || defaultPrint;
+
+  if (command === 'use') {
+    const { positional, passthrough } = parseUseArgs(rest);
+    return useCommand(positional, passthrough, deps);
+  }
+
+  const { positional } = parseArgs(rest);
 
   switch (command) {
     case 'add': return addCommand(positional, { ...deps, print });
     case 'list': return listCommand({ ...deps, print });
     case 'status': return statusCommand(positional, { ...deps, print });
-    case 'use': return useCommand(positional, passthrough, deps);
     case 'refresh': return refreshCommand(positional, deps);
     case 'remove': return removeCommand(positional, deps);
     case 'help':

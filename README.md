@@ -48,7 +48,7 @@ isolated config directory.
 claude-profiles add <profile>
 claude-profiles list
 claude-profiles status [profile]
-claude-profiles use <profile> [-- <claude arguments>]
+claude-profiles use <profile> [claude arguments...]
 claude-profiles refresh <profile>
 claude-profiles remove <profile>
 claude-profiles help
@@ -77,8 +77,9 @@ With no argument, report every profile.
 ### `use`
 
 ```sh
-claude-profiles use <profile> [-- <claude arguments>]
+claude-profiles use <profile> [claude arguments...]
 claude-profiles use mep
+claude-profiles use uplive --resume
 claude-profiles use uplive -- --resume
 ```
 
@@ -89,10 +90,10 @@ Claude binary directly with `CLAUDE_CONFIG_DIR` set. For a newly authenticated
 profile, complete Claude's one-time onboarding screens on its first `use`;
 later launches skip the login selector.
 
-The `--` token separates the profile name from arguments forwarded to Claude.
-Everything after `--` is passed to Claude verbatim; for example,
-`claude-profiles use uplive -- --resume` resumes the previous session on the
-`uplive` account.
+Every argument after the profile name is passed to Claude verbatim; for example,
+`claude-profiles use uplive --resume` resumes the previous session on the
+`uplive` account. A literal `--` directly after the profile name is optional
+and is dropped, so `claude-profiles use uplive -- --resume` behaves the same.
 
 If per-profile config materialisation fails, `use` aborts before launching
 Claude. There is no fallback to a non-isolated run.
