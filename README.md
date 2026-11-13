@@ -153,16 +153,16 @@ warning that names the `tier` command. The weights are the plans' documented
 5-hour multipliers; weekly limits are assumed to scale the same way, and
 `custom:<n>` lets you correct that.
 
-**Where usage comes from.** For each profile, `claude-profiles` starts that
-profile's own `claude` (`--safe-mode`, stream-json, competing auth variables
-stripped, `CLAUDE_CONFIG_DIR` set, a fixed working directory) and sends the SDK
-`get_usage` control request, with a 10 second timeout. Claude reads its own
-credentials; `claude-profiles` never reads, prints, or logs a token or Keychain
-item. A result no older than 60 seconds in the profile's own `.claude.json`
-(`cachedUsageUtilization`, for the same account) is used instead of a new probe.
-Profiles are checked in parallel. A profile whose usage cannot be read is
-reported on stderr and excluded; if none can be read, `use --auto` fails and
-launches nothing.
+**Where usage comes from.** A result no older than 60 seconds in the profile's
+own `.claude.json` (`cachedUsageUtilization`, for the same account) is used
+first. Otherwise, `claude-profiles` starts that profile's own `claude`
+(`--safe-mode`, stream-json, competing auth variables stripped,
+`CLAUDE_CONFIG_DIR` set, a fixed working directory) and sends the `get_usage`
+control request, with a 10 second timeout. Claude reads its own credentials;
+`claude-profiles` never reads, prints, or logs a token or Keychain item. Profiles
+are checked in parallel. A profile whose usage cannot be read is reported on
+stderr and excluded; if none can be read, `use --auto` fails and launches
+nothing.
 
 > **Experimental API.** `get_usage` is marked experimental by Claude Code and
 > its response shape may change between versions. Parsing is defensive: anything
