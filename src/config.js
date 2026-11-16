@@ -225,10 +225,12 @@ async function existingOAuthAccount(target) {
  * @param {(text: string) => void} [args.warn] - Receives non-fatal notices.
  * @param {(pid: number) => boolean} [args.isAlive] - Liveness check used when repairing shared links.
  * @param {() => number} [args.now] - Clock for backup names.
+ * @param {(entry: { item: string, action: string }) => void} [args.onUnrepaired] - Called for each shared
+ *   item the launch repair could not fix (`skip-live`, `failed`), so a later check does not repeat the warning.
  */
 async function materializeProfileConfig({
   baseConfigDir, baseStateFile, profilesConfigDir, profile, sessions = 'private', sharedSessionsDir, warn = () => {},
-  isAlive, now
+  isAlive, now, onUnrepaired = () => {}
 }) {
   validateProfile(profile);
   const shareSessions = sessions === 'shared';
@@ -251,6 +253,7 @@ async function materializeProfileConfig({
     // whose link was replaced by a real file, must not stay inconsistent.
     for (const entry of await reconcileSharedItems({ baseConfigDir, target, profile, isAlive, now })) {
       if (entry.action !== 'link') warn(describeRelink(profile, entry));
+      if (entry.action === 'skip-live' || entry.action === 'failed') onUnrepaired(entry);
     }
     if (shareSessions) {
       const { needsMigration } = await linkSharedSessions(target, sharedSessionsDir);
@@ -369,5 +372,5 @@ async function hasProfileAuth({ profilesConfigDir, profile }) {
 
 module.exports = {
   materializeProfileConfig, removeProfileConfig, hasProfileAuth, readProfileState,
-  linkSharedSessions, sessionItemState, reconcileSharedItems, describeRelink, SHARED_ITEMS, SHARED_SESSION_ITEMS
+  linkSharedSessions, sessionItemState, reconcileSharedItems, describeRelink, pointsAt, SHARED_ITEMS, SHARED_SESSION_ITEMS
 };

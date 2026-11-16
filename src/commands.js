@@ -5,11 +5,12 @@ const { rankProfiles, formatReset, formatIn } = require('./select.js');
 const { parseResumeIntent, locateSession, projectsAreShared, readLastOrganization } = require('./sessions.js');
 const shareSessions = require('./share-sessions.js');
 const { reconcileSharedItems, describeRelink } = require('./config.js');
+const { checkProfile } = require('./doctor.js');
 const { defaultIsAlive } = require('./liveness.js');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
-const COMMANDS = new Set(['add', 'list', 'status', 'use', 'usage', 'tier', 'share-sessions', 'relink', 'refresh', 'remove', 'help', '--help', '-h']);
+const COMMANDS = new Set(['add', 'list', 'status', 'use', 'usage', 'tier', 'share-sessions', 'relink', 'doctor', 'refresh', 'remove', 'help', '--help', '-h']);
 
 // Exit status when auto mode refuses to launch because nothing has capacity.
 const EXIT_EXHAUSTED = 3;
@@ -31,6 +32,8 @@ Commands:
   relink [--dry-run] <profile>|--all
                                    Re-link a profile's shared settings, skills,
                                    plugins etc. to the base ~/.claude config
+  doctor [<profile>|--all]         Check profiles for broken links, plugins, hooks,
+                                   skills and connectors; exits 1 on warnings
   refresh <profile>                Sign in again for a profile
   remove <profile>                 Remove a profile after confirmation
   help, --help, -h                 Show this help
@@ -183,9 +186,28 @@ async function statusCommand(positional, deps) {
   }
 }
 
+// Same checks as `doctor`, printed before Claude starts. Warn-only: whatever
+// goes wrong in here, the launch proceeds.
+async function warnAboutProfile({ profile, configDir, skipLinkItems, deps }) {
+  const printErr = deps.printErr || defaultPrintErr;
+  try {
+    const lines = await checkProfile({
+      profile, profileDir: configDir, baseConfigDir: deps.baseConfigDir, env: deps.env || process.env, skipLinkItems, launch: true
+    });
+    for (const line of lines) printErr(line);
+  } catch (err) {
+    printErr(`warning: ${profile}: could not run the profile checks (${err && err.message ? err.message : err}); run: claude-profiles doctor ${profile}`);
+  }
+}
+
 async function launchProfile(profile, passthrough, deps) {
-  const configDir = await deps.materializeProfileConfig(materializeArgs(deps, profile.name, profile.sessions));
+  const unrepaired = new Set();
+  const configDir = await deps.materializeProfileConfig({
+    ...materializeArgs(deps, profile.name, profile.sessions),
+    onUnrepaired: (entry) => unrepaired.add(entry.item)
+  });
   const claudePath = await deps.resolveClaude({ env: deps.env });
+  await warnAboutProfile({ profile: profile.name, configDir, skipLinkItems: unrepaired, deps });
   const launch = deps.launchClaude || launchClaude;
   launch({
     claudePath,
@@ -596,6 +618,45 @@ async function relinkCommand(args, deps) {
   if (problems > 0) throw new Error(`${problems} shared item(s) were not relinked; see above.`);
 }
 
+const DOCTOR_USAGE = 'Usage: doctor [<profile>|--all]';
+
+function parseDoctorArgs(args) {
+  const names = [];
+  let all = false;
+  for (const arg of args) {
+    if (arg === '--all') all = true;
+    else if (arg.startsWith('-')) throw new Error(`Usage: unknown option "${arg}". ${DOCTOR_USAGE}`);
+    else if (!names.includes(arg)) names.push(arg);
+  }
+  if ((all && names.length > 0) || names.length > 1) throw new Error(DOCTOR_USAGE);
+  return { name: names[0], all: all || names.length === 0 };
+}
+
+// The launch-time checks on demand, for one profile or all (the default).
+// Prints nothing for a clean profile; exits 1 when there is a warning.
+async function doctorCommand(args, deps) {
+  const { name, all } = parseDoctorArgs(args);
+  const print = deps.print;
+  const printErr = deps.printErr || defaultPrintErr;
+  const profiles = all ? (await deps.registry.list()).map((profile) => profile.name) : [(await deps.registry.get(name)).name];
+
+  let warnings = 0;
+  for (const profile of profiles) {
+    const profileDir = path.join(deps.profilesConfigDir, profile);
+    if (!(await isDirectory(profileDir))) {
+      if (!all) throw new Error(`${profile}: no profile config yet; run: claude-profiles use ${profile}`);
+      print(`${profile}: no profile config yet; skipped`);
+      continue;
+    }
+    const lines = await checkProfile({
+      profile, profileDir, baseConfigDir: deps.baseConfigDir, env: deps.env || process.env
+    });
+    for (const line of lines) printErr(line);
+    warnings += lines.length;
+  }
+  if (warnings > 0) throw new Error(`${warnings} warning(s) found; see above.`);
+}
+
 async function run(argv, deps = {}) {
   if (!Array.isArray(argv)) throw new Error('Usage: arguments must be an array.');
 
@@ -614,6 +675,7 @@ async function run(argv, deps = {}) {
   if (command === 'usage') return usageCommand(rest, { ...deps, print });
   if (command === 'share-sessions') return shareSessionsCommand(rest, { ...deps, print });
   if (command === 'relink') return relinkCommand(rest, { ...deps, print });
+  if (command === 'doctor') return doctorCommand(rest, { ...deps, print });
 
   const { positional } = parseArgs(rest);
 

@@ -54,6 +54,7 @@ claude-profiles usage [--json]
 claude-profiles tier <profile> <tier>
 claude-profiles share-sessions [--dry-run] [--rollback] [<profile>...]
 claude-profiles relink [--dry-run] <profile>|--all
+claude-profiles doctor [<profile>|--all]
 claude-profiles refresh <profile>
 claude-profiles remove <profile>
 claude-profiles help
@@ -148,6 +149,40 @@ A new profile gets the links when it is created, and every launch (`use`,
 `relink` runs the same repair on demand for one profile or `--all`, and
 `--dry-run` prints what would change without touching anything. It exits
 non-zero when an item was skipped (Claude running) or could not be replaced.
+
+### Profile checks and `doctor`
+
+```sh
+claude-profiles doctor [<profile>|--all]
+```
+
+Some things still go wrong per profile after the links are in place: a plugin
+that was never installed, a hook script that moved, a skill link that points
+nowhere, a claude.ai connector this account has not authenticated. Claude Code's
+own documentation does not say it reports the first three at startup (plugin
+errors are listed in `/plugin`, a bad hook only fails when it runs), so
+`claude-profiles` checks for them itself.
+
+The checks run before Claude starts on every `use` launch (including `use --auto`
+and its `--resume`/`--continue` path), and on demand with `doctor` for one
+profile or all of them (the default). Each problem is one `warning: <profile>: ...`
+line on stderr that names the item and the fix. A clean profile prints nothing.
+They only read local files: no network, and `claude` is never started.
+
+| Check | Warns when |
+| --- | --- |
+| Shared links | An item that exists in the base config is missing, a real file or directory, linked somewhere else, or broken. This includes an item the launch repair skipped because Claude was running (that case is reported once). Fix: `relink`. |
+| Plugins | A plugin enabled in `settings.json` / `settings.local.json` is not in `plugins/installed_plugins.json`, its install folder is gone, or its marketplace is not in `plugins/known_marketplaces.json`. |
+| Hooks | A command hook (from `settings.json` and `settings.local.json`, combined per event) runs a script or executable that cannot be found (or is not executable). Commands that are not a plain command (pipes, `;`, `&&`, `$(...)`, `bash -c`, `${CLAUDE_PLUGIN_ROOT}`, relative paths, shell keywords) are skipped, because their target cannot be told from the text. |
+| Skills | A link inside `skills` points at something that no longer exists. At launch more than 10 are folded into one summary line; `doctor` lists every one. |
+| Connectors | The profile's own `mcp-needs-auth-cache.json` lists a `claude.ai ...` connector. Each account authenticates its own connectors; plugin MCP servers in that file are not reported. At launch they are one summary line, `<N> connectors not logged in - run claude-profiles doctor <profile>`; `doctor` lists each connector on its own line. |
+
+A file the checks cannot read or do not recognise (invalid JSON, an unexpected
+shape) gives a single `could not check ...` line for that item instead of an
+error. Launching never changes: warnings do not block it and do not change its
+exit status. `doctor` exits `1` when it printed any warning, `0` otherwise. With
+one named profile that has no config yet it is an error; with `--all` that
+profile is skipped.
 
 ### `usage`
 

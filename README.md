@@ -73,6 +73,7 @@ Prefer to choose yourself? `claude-profiles use work --resume` launches the
 | Plan tiers | `pro`, `team-standard`, `max5x`, `team-premium`, `max20x`, or `custom:<n>`. Set one explicitly; Max plans are also detected. | [auto-mode.md](docs/auto-mode.md) |
 | Shared sessions | Opt in per profile so `use --auto --continue` resumes the same conversation on another account. Rollback included. | [shared-sessions.md](docs/shared-sessions.md) |
 | One shared config | Every profile links your base `~/.claude` settings, `CLAUDE.md`, skills, agents, plugins, commands, hooks, keybindings, and output styles. Each launch repairs a missing or drifted link; `relink --all` repairs every profile at once. | [commands.md](docs/commands.md#shared-config-and-relink) |
+| Launch warnings | Every launch checks the profile for broken links, plugins that are enabled but not installed, missing hook scripts, dangling skill links, and claude.ai connectors still needing sign-in. It warns and never blocks; a clean profile prints nothing. `doctor [<profile>\|--all]` runs the same checks on demand and exits non-zero on warnings. | [commands.md](docs/commands.md#profile-checks-and-doctor) |
 | Argument passthrough | Everything after the profile name goes to `claude` verbatim: `use work --model opus`. | [commands.md](docs/commands.md) |
 | Safe by default | When every profile is exhausted it asks before launching (or exits with status `3` without a terminal). | [auto-mode.md](docs/auto-mode.md) |
 
