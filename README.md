@@ -32,9 +32,9 @@ the conversation you were in.
   on a premium plan can beat 5% used on a standard one.
 - **Keep your place.** Opt in to shared session history and continue a
   conversation on another account.
-- **Still plain Claude Code.** Your settings, plugins, and skills are shared
-  across profiles, and every argument after the profile name goes to `claude`
-  untouched.
+- **Still plain Claude Code.** Your settings, `CLAUDE.md`, skills, agents,
+  plugins, and more are shared across profiles, and every argument after the
+  profile name goes to `claude` untouched.
 - **No dependencies.** Node built-ins only.
 
 ## Quick start
@@ -72,6 +72,7 @@ Prefer to choose yourself? `claude-profiles use work --resume` launches the
 | Usage table | `usage` shows each profile's tier, 5-hour and weekly use, reset time, capacity, and status. `--json` for scripts. | [commands.md](docs/commands.md) |
 | Plan tiers | `pro`, `team-standard`, `max5x`, `team-premium`, `max20x`, or `custom:<n>`. Set one explicitly; Max plans are also detected. | [auto-mode.md](docs/auto-mode.md) |
 | Shared sessions | Opt in per profile so `use --auto --continue` resumes the same conversation on another account. Rollback included. | [shared-sessions.md](docs/shared-sessions.md) |
+| One shared config | Every profile links your base `~/.claude` settings, `CLAUDE.md`, skills, agents, plugins, commands, hooks, keybindings, and output styles. Each launch repairs a missing or drifted link; `relink --all` repairs every profile at once. | [commands.md](docs/commands.md#shared-config-and-relink) |
 | Argument passthrough | Everything after the profile name goes to `claude` verbatim: `use work --model opus`. | [commands.md](docs/commands.md) |
 | Safe by default | When every profile is exhausted it asks before launching (or exits with status `3` without a terminal). | [auto-mode.md](docs/auto-mode.md) |
 
