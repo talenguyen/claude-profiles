@@ -5,8 +5,25 @@ const { sanitizeEnvironment } = require('./environment.js');
 const { resolveTier } = require('./tier.js');
 
 const CACHE_TTL_MS = 60_000;
-const PROBE_TIMEOUT_MS = 10_000;
+const PROBE_TIMEOUT_MS = 30_000;
+const PROBE_TIMEOUT_ENV = 'CLAUDE_PROFILES_PROBE_TIMEOUT_MS';
+// setTimeout treats larger delays as 1 ms, so an override must stay below this.
+const MAX_TIMER_MS = 2_147_483_647;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Probe timeout from `CLAUDE_PROFILES_PROBE_TIMEOUT_MS` (milliseconds, positive
+ * integer). Any other value, including empty, non-numeric or out of range,
+ * falls back to the default.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {number}
+ */
+function probeTimeoutFromEnv(env = process.env) {
+  const raw = env && typeof env[PROBE_TIMEOUT_ENV] === 'string' ? env[PROBE_TIMEOUT_ENV].trim() : '';
+  const ms = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  return Number.isSafeInteger(ms) && ms > 0 && ms <= MAX_TIMER_MS ? ms : PROBE_TIMEOUT_MS;
+}
 
 const PROBE_ARGS = [
   '-p',
@@ -121,7 +138,7 @@ function probeUsage({ claudePath, configDir, env, cwd, spawn, timeoutMs = PROBE_
       else resolve(usage);
     };
 
-    const timer = setTimeout(() => finish(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    const timer = setTimeout(() => finish(new Error(`timed out after ${timeoutMs / 1000}s`)), timeoutMs);
 
     const handleLine = (line) => {
       let message;
@@ -168,7 +185,7 @@ function probeUsage({ claudePath, configDir, env, cwd, spawn, timeoutMs = PROBE_
  */
 async function collectUsage({
   profiles, claudePath, env, cwd, profilesConfigDir, readProfileState, spawnProbe,
-  now = Date.now(), ttlMs = CACHE_TTL_MS, timeoutMs = PROBE_TIMEOUT_MS
+  now = Date.now(), ttlMs = CACHE_TTL_MS, timeoutMs = probeTimeoutFromEnv(env)
 }) {
   return Promise.all(profiles.map(async (profile) => {
     const { name } = profile;
@@ -208,4 +225,4 @@ async function collectUsage({
   }));
 }
 
-module.exports = { normalizeUsage, readCachedUsage, probeUsage, collectUsage, CACHE_TTL_MS, PROBE_TIMEOUT_MS, PROBE_ARGS };
+module.exports = { normalizeUsage, readCachedUsage, probeUsage, collectUsage, probeTimeoutFromEnv, CACHE_TTL_MS, PROBE_TIMEOUT_MS, PROBE_TIMEOUT_ENV, PROBE_ARGS };

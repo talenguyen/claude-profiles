@@ -54,7 +54,10 @@ own `.claude.json` (`cachedUsageUtilization`, for the same account) is used
 first. Otherwise, `claude-profiles` starts that profile's own `claude`
 (`--safe-mode`, stream-json, competing auth variables stripped,
 `CLAUDE_CONFIG_DIR` set, a fixed working directory) and sends the `get_usage`
-control request, with a 10 second timeout. Claude reads its own credentials;
+control request, with a 30 second timeout. Set `CLAUDE_PROFILES_PROBE_TIMEOUT_MS`
+to a positive whole number of milliseconds to change it (for example `60000`);
+an empty, non-numeric, non-positive or over-2147483647 value falls back to
+30 seconds. Slow launchd jobs may need the longer timeout. Claude reads its own credentials;
 `claude-profiles` never reads, prints, or logs a token or Keychain item. Profiles
 are checked in parallel. A profile whose usage cannot be read is reported on
 stderr and excluded; if none can be read, `use --auto` fails and launches

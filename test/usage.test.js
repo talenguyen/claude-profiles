@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { normalizeUsage, readCachedUsage, probeUsage, collectUsage, PROBE_ARGS } = require('../src/usage.js');
+const { normalizeUsage, readCachedUsage, probeUsage, collectUsage, probeTimeoutFromEnv, PROBE_ARGS, PROBE_TIMEOUT_MS, PROBE_TIMEOUT_ENV } = require('../src/usage.js');
 const { clearInheritedConfigEnv } = require('./helpers.js');
 
 clearInheritedConfigEnv();
@@ -215,4 +215,36 @@ test('collectUsage prefers the fresh cache, probes otherwise, and isolates failu
   assert.match(by.missing.error, /not signed in/);
   assert.deepEqual(probed.sort(), ['/profiles/failing', '/profiles/stale']);
   assert.match(by.failing.tierWarning, /tier failing <tier>/);
+});
+
+test('the probe timeout defaults to 30 seconds', () => {
+  assert.equal(PROBE_TIMEOUT_MS, 30_000);
+  assert.equal(PROBE_TIMEOUT_ENV, 'CLAUDE_PROFILES_PROBE_TIMEOUT_MS');
+  assert.equal(probeTimeoutFromEnv({}), 30_000);
+});
+
+test('the probe timeout accepts a valid override in milliseconds', () => {
+  assert.equal(probeTimeoutFromEnv({ CLAUDE_PROFILES_PROBE_TIMEOUT_MS: '45000' }), 45_000);
+  assert.equal(probeTimeoutFromEnv({ CLAUDE_PROFILES_PROBE_TIMEOUT_MS: ' 500 ' }), 500);
+  assert.equal(probeTimeoutFromEnv({ CLAUDE_PROFILES_PROBE_TIMEOUT_MS: '2147483647' }), 2_147_483_647);
+});
+
+test('the probe timeout falls back to the default for invalid overrides', () => {
+  for (const bad of ['', '   ', '0', '-5', '1.5', '1e3', '30s', 'abc', '99999999999999999999', '2147483648']) {
+    assert.equal(probeTimeoutFromEnv({ CLAUDE_PROFILES_PROBE_TIMEOUT_MS: bad }), 30_000, `value ${JSON.stringify(bad)}`);
+  }
+  assert.equal(probeTimeoutFromEnv(undefined), 30_000);
+});
+
+test('collectUsage applies the env override and reports the actual timeout', async () => {
+  const { spawn, calls } = fakeSpawn({ hang: true });
+  const result = await collectUsage({
+    profiles: [{ name: 'slow' }], claudePath: '/fake/claude', cwd: '/cfg', profilesConfigDir: '/profiles',
+    env: { PATH: '/bin', CLAUDE_PROFILES_PROBE_TIMEOUT_MS: '20' },
+    readProfileState: async () => ({ oauthAccount: { accountUuid: 'u' } }),
+    spawnProbe: spawn, now: NOW
+  });
+  assert.equal(result[0].usage, null);
+  assert.equal(result[0].error, 'timed out after 0.02s');
+  assert.deepEqual(calls[0].child.killed, ['SIGTERM']);
 });
