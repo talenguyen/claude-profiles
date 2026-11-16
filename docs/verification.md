@@ -42,9 +42,9 @@ Each item maps to the acceptance checklist in `spec.md`:
 - [ ] Two terminals running `use mep` and `use uplive` simultaneously keep
       distinct identities — no cross-account leakage between sessions.
 - [ ] Settings, plugins, and skills remain shared across profiles (each
-      profile reads from the same base config via symlinks for
-      `settings.json`, `settings.local.json`, `skills`, `plugins`, `commands`,
-      and `hooks`). `history.jsonl` stays per profile. Runtime files — daemon,
+      profile links the shared items listed in
+      [commands.md](commands.md#shared-config-and-relink) from the same base
+      config). `history.jsonl` stays per profile. Runtime files — daemon,
       lock, socket — are not shared.
 - [ ] `refresh mep` re-authenticates successfully; a follow-up `use mep`
       still opens the TUI directly without a login selector.
