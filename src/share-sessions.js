@@ -2,20 +2,11 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { SHARED_SESSION_ITEMS, sessionItemState } = require('./config.js');
+const { defaultIsAlive, findLiveProcesses, readdirSafe } = require('./liveness.js');
 
 // A migrated profile keeps its old tree next to the link under this suffix.
 const BACKUP_SUFFIX = '.pre-share';
 const CHUNK = 1024 * 1024;
-
-/** True when a process with this pid exists (EPERM still means it exists). */
-function defaultIsAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return Boolean(err && err.code === 'EPERM');
-  }
-}
 
 async function lstatOrNull(target) {
   try {
@@ -24,26 +15,6 @@ async function lstatOrNull(target) {
     if (err && err.code === 'ENOENT') return null;
     throw err;
   }
-}
-
-async function readdirSafe(directory) {
-  try { return await fsp.readdir(directory); } catch { return []; }
-}
-
-/**
- * Claude records each running process as `<config>/sessions/<pid>.json`.
- * Moving a transcript while a writer has it open would split the session, so
- * every operation that touches session trees refuses while one is alive.
- */
-async function findLiveProcesses(profiles, isAlive) {
-  const live = [];
-  for (const { name, dir } of profiles) {
-    for (const file of await readdirSafe(path.join(dir, 'sessions'))) {
-      const match = /^(\d+)\.json$/.exec(file);
-      if (match && isAlive(Number(match[1]))) live.push({ profile: name, pid: Number(match[1]) });
-    }
-  }
-  return live;
 }
 
 function liveError(live) {

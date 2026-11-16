@@ -53,6 +53,7 @@ claude-profiles use --auto [--force] [--no-fork] [claude arguments...]
 claude-profiles usage [--json]
 claude-profiles tier <profile> <tier>
 claude-profiles share-sessions [--dry-run] [--rollback] [<profile>...]
+claude-profiles relink [--dry-run] <profile>|--all
 claude-profiles refresh <profile>
 claude-profiles remove <profile>
 claude-profiles help
@@ -119,6 +120,34 @@ claude-profiles share-sessions [--dry-run] [--rollback] [<profile>...]
 Let opted-in profiles share session history, so a conversation can continue on
 another profile. Covered in full, including the data-crossing note, in
 [shared-sessions.md](shared-sessions.md).
+
+### Shared config and `relink`
+
+```sh
+claude-profiles relink [--dry-run] <profile>|--all
+```
+
+Every profile links these items from your base `~/.claude`, so all profiles
+use the same configuration: `settings.json`, `settings.local.json`,
+`CLAUDE.md`, `skills`, `plugins`, `commands`, `hooks`, `agents`,
+`keybindings.json`, `output-styles`. Items missing from the base config are
+skipped. Account and recall state stays per profile: `.claude.json`,
+`.credentials.json`, `history.jsonl`. Session folders follow
+[shared-sessions.md](shared-sessions.md).
+
+A new profile gets the links when it is created, and every launch (`use`,
+`use --auto`, `refresh`) re-checks an existing profile:
+
+- missing link: created;
+- already a link to the base item: left alone;
+- a real file or directory, or a link somewhere else: moved to
+  `<item>.pre-share-<timestamp>` next to it and replaced by the link. Nothing is
+  deleted. If Claude is running for that profile, the item is left as it is and
+  one warning names it and the command to run once Claude has exited.
+
+`relink` runs the same repair on demand for one profile or `--all`, and
+`--dry-run` prints what would change without touching anything. It exits
+non-zero when an item was skipped (Claude running) or could not be replaced.
 
 ### `usage`
 

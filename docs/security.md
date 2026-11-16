@@ -18,6 +18,10 @@ Back to the [README](../README.md).
 - `use --auto` and `usage` run each profile's own `claude` to read usage and
   never read, print, or log a token or Keychain item. A new profile does not
   inherit the base account's usage cache.
+- Shared config (`settings.json`, `CLAUDE.md`, skills, agents, and so on) is
+  linked from the base `~/.claude`; `.claude.json` and `.credentials.json` are
+  never linked. A drifted shared item is moved aside to a timestamped backup,
+  never deleted, and only while no Claude session of that profile is running.
 - Session history is shared only between profiles you opt in with
   `share-sessions`, in a `0700` folder outside any project. It never contains
   credentials, and `--fork` compares organization ids without printing them.

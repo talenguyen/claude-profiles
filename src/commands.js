@@ -4,10 +4,12 @@ const { collectUsage } = require('./usage.js');
 const { rankProfiles, formatReset, formatIn } = require('./select.js');
 const { parseResumeIntent, locateSession, projectsAreShared, readLastOrganization } = require('./sessions.js');
 const shareSessions = require('./share-sessions.js');
+const { reconcileSharedItems, describeRelink } = require('./config.js');
+const { defaultIsAlive } = require('./liveness.js');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
-const COMMANDS = new Set(['add', 'list', 'status', 'use', 'usage', 'tier', 'share-sessions', 'refresh', 'remove', 'help', '--help', '-h']);
+const COMMANDS = new Set(['add', 'list', 'status', 'use', 'usage', 'tier', 'share-sessions', 'relink', 'refresh', 'remove', 'help', '--help', '-h']);
 
 // Exit status when auto mode refuses to launch because nothing has capacity.
 const EXIT_EXHAUSTED = 3;
@@ -26,6 +28,9 @@ Commands:
   share-sessions [--dry-run] [--rollback] [<profile>...]
                                    Share session history between profiles, so a
                                    conversation can continue on another profile
+  relink [--dry-run] <profile>|--all
+                                   Re-link a profile's shared settings, skills,
+                                   plugins etc. to the base ~/.claude config
   refresh <profile>                Sign in again for a profile
   remove <profile>                 Remove a profile after confirmation
   help, --help, -h                 Show this help
@@ -126,7 +131,9 @@ function materializeArgs(deps, name, sessions = 'private') {
     profile: name,
     sessions,
     sharedSessionsDir: deps.sharedSessionsDir,
-    warn: deps.printErr || defaultPrintErr
+    warn: deps.printErr || defaultPrintErr,
+    isAlive: deps.isAlive,
+    now: deps.now
   };
 }
 
@@ -492,7 +499,7 @@ async function shareSessionsCommand(args, deps) {
     profiles.push({ name, dir });
   }
   const sharedDir = deps.sharedSessionsDir;
-  const isAlive = deps.isAlive || shareSessions.defaultIsAlive;
+  const isAlive = deps.isAlive || defaultIsAlive;
 
   if (rollback) {
     const result = await shareSessions.rollback({ profiles, sharedDir, isAlive, dryRun });
@@ -540,6 +547,55 @@ async function shareSessionsCommand(args, deps) {
   }
 }
 
+const RELINK_USAGE = 'Usage: relink [--dry-run] <profile>|--all';
+
+function parseRelinkArgs(args) {
+  const names = [];
+  let dryRun = false;
+  let all = false;
+  for (const arg of args) {
+    if (arg === '--dry-run') dryRun = true;
+    else if (arg === '--all') all = true;
+    else if (arg.startsWith('-')) throw new Error(`Usage: unknown option "${arg}". ${RELINK_USAGE}`);
+    else if (!names.includes(arg)) names.push(arg);
+  }
+  if (all === (names.length > 0) || names.length > 1) throw new Error(RELINK_USAGE);
+  return { name: names[0], dryRun, all };
+}
+
+// Same reconcile that runs on every launch, on demand, for one profile or all.
+async function relinkCommand(args, deps) {
+  const { name, dryRun, all } = parseRelinkArgs(args);
+  const print = deps.print;
+  const printErr = deps.printErr || defaultPrintErr;
+  const isAlive = deps.isAlive || defaultIsAlive;
+  const profiles = all ? (await deps.registry.list()).map((profile) => profile.name) : [(await deps.registry.get(name)).name];
+  if (profiles.length === 0) { print('No profiles.'); return; }
+
+  let problems = 0;
+  for (const profile of profiles) {
+    const target = path.join(deps.profilesConfigDir, profile);
+    if (!(await isDirectory(target))) {
+      if (!all) throw new Error(`${profile}: no profile config yet; run: claude-profiles use ${profile}`);
+      print(`${profile}: no profile config yet; skipped`);
+      continue;
+    }
+    const results = await reconcileSharedItems({
+      baseConfigDir: deps.baseConfigDir, target, profile, isAlive, dryRun, now: deps.now
+    });
+    if (results.length === 0) print(`${profile}: up to date`);
+    for (const entry of results) {
+      if (entry.action === 'skip-live' || entry.action === 'failed') {
+        problems += 1;
+        printErr(describeRelink(profile, entry));
+      } else {
+        print(describeRelink(profile, entry, { dryRun }));
+      }
+    }
+  }
+  if (problems > 0) throw new Error(`${problems} shared item(s) were not relinked; see above.`);
+}
+
 async function run(argv, deps = {}) {
   if (!Array.isArray(argv)) throw new Error('Usage: arguments must be an array.');
 
@@ -557,6 +613,7 @@ async function run(argv, deps = {}) {
   }
   if (command === 'usage') return usageCommand(rest, { ...deps, print });
   if (command === 'share-sessions') return shareSessionsCommand(rest, { ...deps, print });
+  if (command === 'relink') return relinkCommand(rest, { ...deps, print });
 
   const { positional } = parseArgs(rest);
 
