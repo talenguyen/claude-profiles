@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { checkProfile, hookTarget, POLICY_RULES, MAX_PER_CATEGORY } = require('../src/doctor.js');
+const { checkProfile, hookTarget, MAX_PER_CATEGORY } = require('../src/doctor.js');
 const { materializeProfileConfig, SHARED_ITEMS } = require('../src/config.js');
 const { run } = require('../src/commands.js');
 const { makeTempDir, removeTempDir, clearInheritedConfigEnv } = require('./helpers.js');
@@ -254,14 +254,17 @@ test('a dangling skill link is reported by name; a good link and a plain folder 
   ]);
 });
 
-test('many dangling skills fold into one summary line', async () => {
+test('many dangling skills fold into one summary line at launch; without launch every one is listed', async () => {
   const target = await cleanProfile();
   for (let i = 0; i < MAX_PER_CATEGORY + 3; i += 1) {
     await fsp.symlink(path.join(root, 'moved', `s${i}`), path.join(baseConfigDir, 'skills', `stale-${String(i).padStart(2, '0')}`));
   }
-  const lines = await check(target);
+  const lines = await check(target, { launch: true });
   assert.equal(lines.length, MAX_PER_CATEGORY + 1);
-  assert.equal(lines.at(-1), 'warning: a: ... and 3 more dangling skill links; run: claude-profiles doctor');
+  assert.equal(lines.at(-1), 'warning: a: ... and 3 more dangling skill links; run: claude-profiles doctor a');
+  const all = await check(target);
+  assert.equal(all.length, MAX_PER_CATEGORY + 3);
+  assert.ok(all.every((line) => line.includes('is a dangling link')));
 });
 
 // ---- connectors ----
@@ -274,6 +277,9 @@ test('claude.ai connectors in the per-profile auth cache are reported; plugin se
   assert.deepEqual(await check(target), [
     'warning: a: claude.ai connector "Alpha" needs to be authenticated for this account; run: claude-profiles use a, then /mcp',
     'warning: a: claude.ai connector "Zeta" needs to be authenticated for this account; run: claude-profiles use a, then /mcp'
+  ]);
+  assert.deepEqual(await check(target, { launch: true }), [
+    'warning: a: 2 connectors not logged in - run claude-profiles doctor a'
   ]);
 });
 
@@ -291,42 +297,21 @@ test('an empty auth cache is clean and a malformed one gives one could-not-check
   ]);
 });
 
-// ---- org policy ----
-
-const RULE = { key: 'allow_thing', enabledIn: (settings) => (settings.thing ? 'thing' : null), fix: 'remove "thing" from settings.json' };
-
-test('no policy mapping ships, so a restrictive policy file alone warns about nothing', async () => {
-  assert.deepEqual(POLICY_RULES, []);
-  const target = await cleanProfile();
-  await writeJson(path.join(target, 'policy-limits.json'), { restrictions: { allow_quick_web_setup: { allowed: false } } });
-  assert.deepEqual(await check(target), []);
-});
-
-test('a proven policy rule warns only when the restriction applies and the setting is enabled', async () => {
-  const target = await cleanProfile();
-  const base = JSON.parse(await fsp.readFile(path.join(baseConfigDir, 'settings.json'), 'utf8'));
-  await writeJson(path.join(baseConfigDir, 'settings.json'), { ...base, thing: true });
-  await writeJson(path.join(target, 'policy-limits.json'), { restrictions: { allow_thing: { allowed: false } } });
-  assert.deepEqual(await check(target, { policyRules: [RULE] }), [
-    'warning: a: org policy for this account restricts allow_thing, but the shared settings enable thing; remove "thing" from settings.json'
-  ]);
-  await writeJson(path.join(target, 'policy-limits.json'), { restrictions: { allow_thing: { allowed: true } } });
-  assert.deepEqual(await check(target, { policyRules: [RULE] }), []);
-});
-
-test('a malformed policy file gives one could-not-check line when rules exist', async () => {
-  const target = await cleanProfile();
-  await writeJson(path.join(target, 'policy-limits.json'), '{oops');
-  assert.deepEqual(await check(target, { policyRules: [RULE] }), [
-    'warning: a: could not check org policy (policy-limits.json: it is not valid JSON); skipped'
-  ]);
-  await writeJson(path.join(target, 'policy-limits.json'), { defaults: {} });
-  assert.deepEqual(await check(target, { policyRules: [RULE] }), [
-    'warning: a: could not check org policy (policy-limits.json: it has no "restrictions" object); skipped'
-  ]);
-});
-
 // ---- malformed settings ----
+
+test('hooks in settings.local.json are added to those in settings.json, not replacing them', async () => {
+  const target = await cleanProfile();
+  const missing = path.join(home, '.claude', 'hooks', 'gone.sh');
+  const kept = path.join(baseConfigDir, 'hooks', 'ok.sh');
+  await writeJson(path.join(baseConfigDir, 'settings.json'), hookSettings(`bash '${missing}'`));
+  await writeJson(path.join(baseConfigDir, 'settings.local.json'), { hooks: {
+    Stop: [{ hooks: [{ type: 'command', command: `bash '${kept}'` }] }],
+    PreToolUse: [{ hooks: [{ type: 'command', command: `bash '${kept}'` }] }]
+  } });
+  assert.deepEqual(await check(target), [
+    `warning: a: Stop hook runs ${missing}, but that script was not found; restore it or remove the hook from settings.json`
+  ]);
+});
 
 test('a malformed settings.json gives one could-not-check line instead of a crash', async () => {
   const target = await cleanProfile();
@@ -375,6 +360,23 @@ test('doctor prints each warning and exits non-zero', async () => {
   const second = commandDeps();
   await assert.rejects(run(['doctor', 'a'], second.deps), /2 warning\(s\) found/);
   await run(['doctor', 'b'], second.deps);
+});
+
+test('doctor lists every connector and dangling skill, with no fold or summary line', async () => {
+  await fillBase();
+  const target = await makeProfile('a');
+  const count = MAX_PER_CATEGORY + 2;
+  const cache = {};
+  for (let i = 0; i < count; i += 1) {
+    cache[`claude.ai C${String(i).padStart(2, '0')}`] = { timestamp: i };
+    await fsp.symlink(path.join(root, 'moved', `s${i}`), path.join(baseConfigDir, 'skills', `stale-${String(i).padStart(2, '0')}`));
+  }
+  await writeJson(path.join(target, 'mcp-needs-auth-cache.json'), cache);
+  const { deps, err } = commandDeps();
+  await assert.rejects(run(['doctor', 'a'], deps), new RegExp(`${2 * count} warning`));
+  assert.equal(err.filter((line) => line.includes('is a dangling link')).length, count);
+  assert.equal(err.filter((line) => line.includes('needs to be authenticated for this account')).length, count);
+  assert.ok(!err.some((line) => line.includes('more dangling') || line.includes('not logged in')));
 });
 
 test('doctor for one profile without a config errors, and with --all skips it', async () => {
@@ -434,7 +436,7 @@ test('launch warns about every fault class and still launches', async () => {
   const { deps, err, launched } = launchDeps({ launchClaude: (args) => launched.push(args) });
   await run(['use', 'a', '--resume'], deps);
   assert.equal(err.length, 4);
-  for (const part of ['plugin missing@market', 'Stop hook runs', 'skill "stale"', 'claude.ai connector "Uplive Data"']) {
+  for (const part of ['plugin missing@market', 'Stop hook runs', 'skill "stale"', 'warning: a: 1 connectors not logged in - run claude-profiles doctor a']) {
     assert.ok(err.some((line) => line.includes(part)), part);
   }
   assert.equal(launched.length, 1);
@@ -494,6 +496,6 @@ test('the check also runs on the auto launch path, including auto resume', async
     });
     await run(argv, deps);
     assert.equal(launched.length, 1, argv.join(' '));
-    assert.equal(err.filter((line) => line.includes('claude.ai connector "Uplive Data"')).length, 1, argv.join(' '));
+    assert.equal(err.filter((line) => line === 'warning: a: 1 connectors not logged in - run claude-profiles doctor a').length, 1, argv.join(' '));
   }
 });

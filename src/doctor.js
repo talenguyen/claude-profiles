@@ -13,19 +13,11 @@ const { SHARED_ITEMS, pointsAt } = require('./config.js');
  *  - plugins enabled in settings but not installed, or missing their marketplace;
  *  - hook commands whose script or executable cannot be found;
  *  - dangling skill links;
- *  - claude.ai connectors this account still has to authenticate;
- *  - org policy restricting something the shared settings enable (see POLICY_RULES).
+ *  - claude.ai connectors this account still has to authenticate.
  */
 
-// Past this many lines in one category the rest are folded into a single line.
+// At launch, past this many dangling skill links the rest are folded into one line.
 const MAX_PER_CATEGORY = 10;
-
-// Org policy (`policy-limits.json`, restriction key -> { allowed }) is read only
-// for restrictions whose effect on a setting is proven. Neither Claude Code's
-// documentation nor the local files say what any restriction key switches off,
-// so no rule ships: guessing a mapping would warn about things that work.
-// A rule is { key, enabledIn(settings) -> description | null, fix }.
-const POLICY_RULES = [];
 
 const SHELL_WORDS = new Set([
   'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', 'time', '!', '{', '}',
@@ -309,46 +301,37 @@ async function checkSkills({ profileDir }) {
 // keyed by its name; claude.ai connectors are the keys that start with this.
 const CONNECTOR_PREFIX = 'claude.ai ';
 
-async function checkConnectors({ profile, profileDir }) {
+async function checkConnectors({ profile, profileDir, summarize }) {
   const file = await readJsonObject(path.join(profileDir, 'mcp-needs-auth-cache.json'));
   if (file.state === 'missing') return [];
   if (file.state === 'bad') return [`could not check connectors (mcp-needs-auth-cache.json: ${file.reason}); delete that file to reset it`];
-  return Object.keys(file.value)
-    .filter((name) => name.startsWith(CONNECTOR_PREFIX))
-    .sort()
-    .map((name) => `claude.ai connector "${name.slice(CONNECTOR_PREFIX.length)}" needs to be authenticated for this account; run: claude-profiles use ${profile}, then /mcp`);
-}
-
-// ---- org policy ------------------------------------------------------------
-
-async function checkPolicy({ profileDir, settings, rules }) {
-  if (rules.length === 0) return [];
-  const file = await readJsonObject(path.join(profileDir, 'policy-limits.json'));
-  if (file.state === 'missing') return [];
-  const { restrictions } = file.state === 'ok' ? file.value : {};
-  if (file.state === 'bad' || restrictions === null || typeof restrictions !== 'object' || Array.isArray(restrictions)) {
-    return [`could not check org policy (policy-limits.json: ${file.state === 'bad' ? file.reason : 'it has no "restrictions" object'}); skipped`];
-  }
-  const lines = [];
-  for (const rule of rules) {
-    const restriction = restrictions[rule.key];
-    if (!restriction || restriction.allowed !== false) continue;
-    const enabled = rule.enabledIn(settings);
-    if (enabled) lines.push(`org policy for this account restricts ${rule.key}, but the shared settings enable ${enabled}; ${rule.fix}`);
-  }
-  return lines;
+  const names = Object.keys(file.value).filter((name) => name.startsWith(CONNECTOR_PREFIX)).sort();
+  if (summarize) return names.length > 0 ? [`${names.length} connectors not logged in - run claude-profiles doctor ${profile}`] : [];
+  return names.map((name) => `claude.ai connector "${name.slice(CONNECTOR_PREFIX.length)}" needs to be authenticated for this account; run: claude-profiles use ${profile}, then /mcp`);
 }
 
 // ---- entry point -----------------------------------------------------------
 
-function fold(lines, category) {
+function fold(lines, profile) {
   if (lines.length <= MAX_PER_CATEGORY) return lines;
   const rest = lines.length - MAX_PER_CATEGORY;
-  return [...lines.slice(0, MAX_PER_CATEGORY), `... and ${rest} more ${category}; run: claude-profiles doctor`];
+  return [...lines.slice(0, MAX_PER_CATEGORY), `... and ${rest} more dangling skill links; run: claude-profiles doctor ${profile}`];
+}
+
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function mergeHooks(base, local) {
+  if (!isObject(base) || !isObject(local)) return local;
+  const merged = { ...base };
+  for (const [event, groups] of Object.entries(local)) {
+    merged[event] = Array.isArray(merged[event]) && Array.isArray(groups) ? [...merged[event], ...groups] : groups;
+  }
+  return merged;
 }
 
 // Settings the profile will actually load: the shared `settings.json`, with
-// `settings.local.json` on top. A missing file is not a problem here.
+// `settings.local.json` on top (plugins merged by id, hooks concatenated per
+// event). A missing file is not a problem here.
 async function readSettings(profileDir) {
   const merged = {};
   const problems = [];
@@ -356,13 +339,14 @@ async function readSettings(profileDir) {
     const file = await readJsonObject(path.join(profileDir, name));
     if (file.state === 'bad') problems.push(`${name}: ${file.reason}`);
     else if (file.state === 'ok') {
-      const { enabledPlugins, ...rest } = file.value;
+      const { enabledPlugins, hooks, ...rest } = file.value;
       Object.assign(merged, rest);
       if (enabledPlugins !== undefined) {
-        merged.enabledPlugins = enabledPlugins !== null && typeof enabledPlugins === 'object' && !Array.isArray(enabledPlugins) && merged.enabledPlugins && typeof merged.enabledPlugins === 'object'
+        merged.enabledPlugins = isObject(enabledPlugins) && isObject(merged.enabledPlugins)
           ? { ...merged.enabledPlugins, ...enabledPlugins }
           : enabledPlugins;
       }
+      if (hooks !== undefined) merged.hooks = mergeHooks(merged.hooks, hooks);
     }
   }
   return { settings: merged, problems };
@@ -375,11 +359,12 @@ async function readSettings(profileDir) {
  * @param {string} [args.baseConfigDir] - The base `~/.claude`; without it the link check is skipped.
  * @param {NodeJS.ProcessEnv} [args.env] - `HOME` and `PATH` for resolving hook commands.
  * @param {Set<string>} [args.skipLinkItems] - Shared items the launch repair already warned about.
- * @param {object[]} [args.policyRules]
+ * @param {boolean} [args.launch] - Launch output: fold dangling skill links past
+ *   MAX_PER_CATEGORY and sum connectors needing login into one line. `doctor` lists every item.
  * @returns {Promise<string[]>} Warning lines, `warning: <profile>: ...`; empty when the profile is clean.
  */
 async function checkProfile({
-  profile, profileDir, baseConfigDir, env = process.env, skipLinkItems = new Set(), policyRules = POLICY_RULES
+  profile, profileDir, baseConfigDir, env = process.env, skipLinkItems = new Set(), launch = false
 }) {
   const info = await lstatOrNull(profileDir).catch(() => null);
   if (!info) return [];
@@ -412,14 +397,13 @@ async function checkProfile({
     if (!links.flagged.has('plugins')) await guard('plugins', () => checkPlugins({ profileDir, settings }));
     await guard('hooks', () => checkHooks({ settings, env }));
   }
-  const skills = [];
-  await guard('skills', async () => { skills.push(...(await checkSkills({ profileDir }))); return []; });
-  const connectors = [];
-  await guard('connectors', async () => { connectors.push(...(await checkConnectors({ profile, profileDir }))); return []; });
-  await guard('org policy', () => checkPolicy({ profileDir, settings, rules: policyRules }));
+  await guard('skills', async () => {
+    const skills = await checkSkills({ profileDir });
+    return launch ? fold(skills, profile) : skills;
+  });
+  await guard('connectors', () => checkConnectors({ profile, profileDir, summarize: launch }));
 
-  return [...lines, ...fold(skills, 'dangling skill links'), ...fold(connectors, 'connectors')]
-    .map((line) => `warning: ${profile}: ${line}`);
+  return lines.map((line) => `warning: ${profile}: ${line}`);
 }
 
-module.exports = { checkProfile, hookTarget, POLICY_RULES, MAX_PER_CATEGORY };
+module.exports = { checkProfile, hookTarget, MAX_PER_CATEGORY };

@@ -173,10 +173,9 @@ They only read local files: no network, and `claude` is never started.
 | --- | --- |
 | Shared links | An item that exists in the base config is missing, a real file or directory, linked somewhere else, or broken. This includes an item the launch repair skipped because Claude was running (that case is reported once). Fix: `relink`. |
 | Plugins | A plugin enabled in `settings.json` / `settings.local.json` is not in `plugins/installed_plugins.json`, its install folder is gone, or its marketplace is not in `plugins/known_marketplaces.json`. |
-| Hooks | A command hook runs a script or executable that cannot be found (or is not executable). Commands that are not a plain command (pipes, `;`, `&&`, `$(...)`, `bash -c`, `${CLAUDE_PLUGIN_ROOT}`, relative paths, shell keywords) are skipped, because their target cannot be told from the text. |
-| Skills | A link inside `skills` points at something that no longer exists. More than 10 are folded into one summary line. |
-| Connectors | The profile's own `mcp-needs-auth-cache.json` lists a `claude.ai ...` connector. Each account authenticates its own connectors; plugin MCP servers in that file are not reported. |
-| Org policy | A restriction in the profile's `policy-limits.json` blocks something the shared settings enable. No mapping from a restriction to a setting is documented or visible in the local files, so none is built in yet and this check never warns today. |
+| Hooks | A command hook (from `settings.json` and `settings.local.json`, combined per event) runs a script or executable that cannot be found (or is not executable). Commands that are not a plain command (pipes, `;`, `&&`, `$(...)`, `bash -c`, `${CLAUDE_PLUGIN_ROOT}`, relative paths, shell keywords) are skipped, because their target cannot be told from the text. |
+| Skills | A link inside `skills` points at something that no longer exists. At launch more than 10 are folded into one summary line; `doctor` lists every one. |
+| Connectors | The profile's own `mcp-needs-auth-cache.json` lists a `claude.ai ...` connector. Each account authenticates its own connectors; plugin MCP servers in that file are not reported. At launch they are one summary line, `<N> connectors not logged in - run claude-profiles doctor <profile>`; `doctor` lists each connector on its own line. |
 
 A file the checks cannot read or do not recognise (invalid JSON, an unexpected
 shape) gives a single `could not check ...` line for that item instead of an

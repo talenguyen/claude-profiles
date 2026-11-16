@@ -192,7 +192,7 @@ async function warnAboutProfile({ profile, configDir, skipLinkItems, deps }) {
   const printErr = deps.printErr || defaultPrintErr;
   try {
     const lines = await checkProfile({
-      profile, profileDir: configDir, baseConfigDir: deps.baseConfigDir, env: deps.env || process.env, skipLinkItems
+      profile, profileDir: configDir, baseConfigDir: deps.baseConfigDir, env: deps.env || process.env, skipLinkItems, launch: true
     });
     for (const line of lines) printErr(line);
   } catch (err) {
